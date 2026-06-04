@@ -1,0 +1,299 @@
+:root {
+  font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+  color: #14213d;
+  background: radial-gradient(circle at 10% 20%, #fef3c7 0%, #f8fafc 45%, #dbeafe 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.app-shell {
+  max-width: 1300px;
+  margin: 0 auto;
+  padding: 1.25rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.hero {
+  background: linear-gradient(115deg, #073b4c 0%, #118ab2 55%, #ffd166 100%);
+  color: #f8fafc;
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: 1.7rem;
+}
+
+.hero p {
+  margin: 0.4rem 0 0.7rem;
+}
+
+.hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  font-size: 0.9rem;
+}
+
+.actor-switch {
+  margin-top: 0.8rem;
+  max-width: 360px;
+}
+
+.panel {
+  background: #ffffffd4;
+  border: 1px solid #dbe3f0;
+  border-radius: 10px;
+  padding: 0.75rem;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.panel-header h3 {
+  margin: 0;
+}
+
+.spread {
+  justify-content: space-between;
+}
+
+.stack-lg {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.stack-md {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.muted {
+  color: #334155;
+  margin-top: 0.4rem;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.score-grid,
+.plain-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.score-grid th,
+.score-grid td,
+.plain-table th,
+.plain-table td {
+  border: 1px solid #d2dae6;
+  padding: 0.55rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.score-grid th,
+.plain-table th {
+  background: #e2e8f0;
+}
+
+.criterion-label {
+  font-weight: 600;
+}
+
+.criterion-description {
+  font-size: 0.84rem;
+  color: #475569;
+  margin-top: 0.2rem;
+}
+
+.cell-stack {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.score-input,
+.comment-input,
+.evidence-form input,
+.evidence-form select,
+.inline-control select {
+  width: 100%;
+  border: 1px solid #9fb5ce;
+  border-radius: 6px;
+  padding: 0.4rem;
+  font: inherit;
+}
+
+.inline-link {
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 0;
+  color: #075985;
+  cursor: pointer;
+}
+
+.evidence-meta {
+  font-size: 0.8rem;
+  color: #334155;
+}
+
+.compact-list {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.85rem;
+}
+
+.inline-control {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 260px;
+}
+
+.badge {
+  border-radius: 20px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.82rem;
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.badge-neutral {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.badge-info {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.badge-warning {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.evidence-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.6rem;
+  align-items: end;
+}
+
+.evidence-form label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.88rem;
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.6rem;
+  align-items: end;
+}
+
+.config-grid label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.88rem;
+}
+
+button {
+  background: #0f766e;
+  color: #f8fafc;
+  border: 0;
+  border-radius: 8px;
+  padding: 0.55rem 0.85rem;
+  cursor: pointer;
+}
+
+.secondary-button {
+  background: #334155;
+}
+
+.action-group {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.tab-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.tab-active {
+  background: #0b3b77;
+}
+
+.comparison-selectors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.timestamp-meta {
+  margin-top: 0.45rem;
+  font-size: 0.8rem;
+  color: #475569;
+}
+
+.heat-low {
+  background: #dcfce7;
+}
+
+.heat-medium {
+  background: #fef9c3;
+}
+
+.heat-high {
+  background: #fee2e2;
+}
+
+.heat-legend {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.heat-legend span {
+  border-radius: 6px;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid #d2dae6;
+}
+
+.actions-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.error-banner {
+  border-color: #fca5a5;
+  background: #fff1f2;
+  color: #9f1239;
+}
+
+@media (max-width: 760px) {
+  .hero-meta {
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .inline-control {
+    min-width: 180px;
+  }
+}
