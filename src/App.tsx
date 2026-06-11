@@ -5,6 +5,7 @@ import { L1AssessmentSection } from './components/L1AssessmentSection';
 import { L1VarianceHeatmap } from './components/L1VarianceHeatmap';
 import { PanelValidationView } from './components/PanelValidationView';
 import { AuditTimeline } from './components/AuditTimeline';
+import { IntakeFrontDoor } from './components/IntakeFrontDoor';
 import { ResultsPanel } from './components/ResultsPanel';
 import { ScoringGrid } from './components/ScoringGrid';
 import { VendorComparisonView } from './components/VendorComparisonView';
@@ -37,7 +38,15 @@ import { fetchAppConfig, updateAppConfig } from './services/configService';
 import { createEvidence, fetchEvidence } from './services/evidenceService';
 import { fetchAuthUsers, loginAsUser, logoutSession, restoreSession } from './services/authService';
 import { createPanelValidation, fetchPanelValidations } from './services/panelValidationService';
-import { fetchRfpBundle, toAssessorWithWeights } from './services/rfpService';
+import {
+  applyRfpL1Draft,
+  createRfpRecord,
+  fetchRfpBundle,
+  fetchRfpIngestJob,
+  fetchRfpRecords,
+  startRfpIngestJob,
+  toAssessorWithWeights,
+} from './services/rfpService';
 import { fetchScores, updateScore } from './services/scoreService';
 import type {
   AppUser,
@@ -51,16 +60,19 @@ import type {
   PanelValidationEntry,
   PanelReviewer,
   Rfp,
+  RfpIngestJob,
   ScoreAuditEvent,
   ScoreEntry,
   User,
   Vendor,
 } from './types/domain';
 
-type AppTab = 'overview' | 'l1' | 'l2l3' | 'results' | 'audit';
+type AppTab = 'intake' | 'overview' | 'l1' | 'l2l3' | 'results' | 'audit';
 
 function App() {
   const [currentRfp, setCurrentRfp] = useState<Rfp>(seedCurrentRfp);
+  const [rfpRecords, setRfpRecords] = useState<Rfp[]>([seedCurrentRfp]);
+  const [selectedRfpId, setSelectedRfpId] = useState<string>(seedCurrentRfp.id);
   const [vendors, setVendors] = useState<Vendor[]>(seedVendors);
   const [criteria, setCriteria] = useState<Criterion[]>(seedCriteria);
   const [assessors, setAssessors] = useState<Assessor[]>(seedAssessors);
@@ -77,6 +89,7 @@ function App() {
   const [scoreAuditEvents, setScoreAuditEvents] = useState<ScoreAuditEvent[]>([]);
   const [appConfig, setAppConfig] = useState<AppConfig>(DEFAULT_APP_CONFIG);
   const [activeTab, setActiveTab] = useState<AppTab>('overview');
+  const [reloadToken, setReloadToken] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [apiError, setApiError] = useState<string | null>(null);
 
@@ -114,8 +127,18 @@ function App() {
       setApiError(null);
 
       try {
-        const bundle = await fetchRfpBundle();
-        const nextRfp = bundle.rfps[0] ?? seedCurrentRfp;
+        const records = await fetchRfpRecords();
+        const availableRecords = records.length > 0 ? records : [seedCurrentRfp];
+        setRfpRecords(availableRecords);
+
+        const preferredRecord = availableRecords.find((record) => record.id === selectedRfpId);
+        const nextRfp = preferredRecord ?? availableRecords[0] ?? seedCurrentRfp;
+
+        if (nextRfp.id !== selectedRfpId) {
+          setSelectedRfpId(nextRfp.id);
+        }
+
+        const bundle = await fetchRfpBundle(nextRfp.id);
         const nextAssessors = toAssessorWithWeights(bundle.assessors, seedAssessors);
         const nextAppUsers: AppUser[] = [
           { id: bundle.primaryOwner.id, name: bundle.primaryOwner.name, role: 'Primary Owner' },
@@ -163,6 +186,14 @@ function App() {
     };
 
     void load();
+  }, [activeUser, selectedRfpId, reloadToken]);
+
+  useEffect(() => {
+    if (!activeUser) {
+      return;
+    }
+
+    setActiveTab(activeUser.role === 'Primary Owner' ? 'intake' : 'overview');
   }, [activeUser]);
 
   const consolidatedL1 = useMemo(() => consolidateL1(scores, criteria, vendors, assessors), [scores, criteria, vendors, assessors]);
@@ -417,7 +448,7 @@ function App() {
       try {
         const user = await loginAsUser(loginUserId);
         setActiveUser(user);
-        setActiveTab('overview');
+        setActiveTab(user.role === 'Primary Owner' ? 'intake' : 'overview');
       } catch (error) {
         setApiError(error instanceof Error ? error.message : 'Unable to sign in.');
       } finally {
@@ -437,6 +468,51 @@ function App() {
         setIsLoading(false);
       }
     })();
+  };
+
+  const handleCreateRecord = async (input: {
+    title: string;
+    organization: string;
+    dueDate: string;
+  }): Promise<Rfp> => {
+    const created = await createRfpRecord(input);
+    const records = await fetchRfpRecords();
+    setRfpRecords(records.length > 0 ? records : [seedCurrentRfp]);
+    setSelectedRfpId(created.id);
+    setReloadToken((current) => current + 1);
+    return created;
+  };
+
+  const handleStartIngest = async (input: {
+    title: string;
+    organization: string;
+    dueDate: string;
+    fileName: string;
+    fileType: string;
+  }): Promise<{ record: Rfp; job: RfpIngestJob }> => {
+    const created = await handleCreateRecord({
+      title: input.title,
+      organization: input.organization,
+      dueDate: input.dueDate,
+    });
+
+    const job = await startRfpIngestJob(created.id, {
+      fileName: input.fileName,
+      fileType: input.fileType,
+    });
+
+    return { record: created, job };
+  };
+
+  const handlePollIngestJob = async (rfpId: string, jobId: string): Promise<RfpIngestJob> => {
+    return fetchRfpIngestJob(rfpId, jobId);
+  };
+
+  const handleApplyIngestDraft = async (rfpId: string, jobId: string): Promise<void> => {
+    await applyRfpL1Draft(rfpId, jobId);
+    setSelectedRfpId(rfpId);
+    setReloadToken((current) => current + 1);
+    setActiveTab('overview');
   };
 
   return (
@@ -470,6 +546,20 @@ function App() {
                   ))}
                 </select>
               </label>
+              <label className="inline-control">
+                Active RFP
+                <select
+                  value={selectedRfpId}
+                  onChange={(event) => setSelectedRfpId(event.target.value)}
+                  disabled={isLoading}
+                >
+                  {rfpRecords.map((record) => (
+                    <option key={record.id} value={record.id}>
+                      {record.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button type="button" onClick={handleLogin} disabled={!loginUserId || isLoading}>
                 Sign in
               </button>
@@ -491,6 +581,23 @@ function App() {
         <>
           <section className="panel">
             <div className="tab-row">
+              {activeUser.role === 'Primary Owner' && (
+                <button type="button" className={activeTab === 'intake' ? 'tab-active' : ''} onClick={() => setActiveTab('intake')}>Intake</button>
+              )}
+              <label className="inline-control" style={{ minWidth: 280 }}>
+                Active RFP
+                <select
+                  value={selectedRfpId}
+                  onChange={(event) => setSelectedRfpId(event.target.value)}
+                  disabled={isLoading}
+                >
+                  {rfpRecords.map((record) => (
+                    <option key={record.id} value={record.id}>
+                      {record.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button type="button" className={activeTab === 'overview' ? 'tab-active' : ''} onClick={() => setActiveTab('overview')}>Overview</button>
               <button type="button" className={activeTab === 'l1' ? 'tab-active' : ''} onClick={() => setActiveTab('l1')}>L1</button>
               <button type="button" className={activeTab === 'l2l3' ? 'tab-active' : ''} onClick={() => setActiveTab('l2l3')}>L2/L3</button>
@@ -498,6 +605,19 @@ function App() {
               <button type="button" className={activeTab === 'audit' ? 'tab-active' : ''} onClick={() => setActiveTab('audit')}>Audit</button>
             </div>
           </section>
+
+          {activeTab === 'intake' && activeUser.role === 'Primary Owner' && (
+            <IntakeFrontDoor
+              records={rfpRecords}
+              selectedRfpId={selectedRfpId}
+              onSelectRfp={setSelectedRfpId}
+              onCreateRecord={handleCreateRecord}
+              onStartIngest={handleStartIngest}
+              onPollIngestJob={handlePollIngestJob}
+              onApplyIngestDraft={handleApplyIngestDraft}
+              onError={(message) => setApiError(message)}
+            />
+          )}
 
           {activeTab === 'overview' && (
             <>

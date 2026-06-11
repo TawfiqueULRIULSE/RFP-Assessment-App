@@ -211,6 +211,44 @@ body {
   font-size: 0.88rem;
 }
 
+.intake-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0.8rem;
+}
+
+.intake-card {
+  border: 1px solid #d2dae6;
+  border-radius: 10px;
+  padding: 0.75rem;
+  background: #f8fafc;
+}
+
+.intake-card h4,
+.intake-job h4 {
+  margin: 0;
+}
+
+.intake-card label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.88rem;
+}
+
+.intake-card input,
+.intake-card select {
+  width: 100%;
+  border: 1px solid #9fb5ce;
+  border-radius: 6px;
+  padding: 0.4rem;
+  font: inherit;
+}
+
+.intake-job {
+  display: grid;
+  gap: 0.55rem;
+}
+
 button {
   background: #0f766e;
   color: #f8fafc;

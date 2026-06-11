@@ -41,13 +41,13 @@ const assessorsWithAssignments = [
   },
 ];
 
-const vendors = [
+const seedVendors = [
   { id: 'vendor-northstar', name: 'Northstar Systems' },
   { id: 'vendor-quanta', name: 'Quanta Grid' },
   { id: 'vendor-apex', name: 'Apex Dynamics' },
 ];
 
-const criteria = [
+const seedCriteria = [
   {
     id: 'l1-architecture',
     layer: 'L1',
@@ -80,23 +80,44 @@ const criteria = [
   },
 ];
 
-const rfps = [
+const defaultL2L3Criteria = [
   {
-    id: 'rfp-2026-network-modernization',
-    title: '2026 Network Modernization RFP',
-    createdAt: nowIso(),
-    primaryOwnerId: users.owner.id,
+    id: 'l2-commercial',
+    layer: 'L2',
+    label: 'Commercial Terms',
+    description: 'Commercial flexibility and contractual alignment.',
+  },
+  {
+    id: 'l3-familiarity',
+    layer: 'L3',
+    label: 'Domain Familiarity',
+    description: 'Institutional familiarity and prior outcomes.',
   },
 ];
 
-const scores = (() => {
+const records = new Map();
+const sessions = new Map();
+const appConfig = {
+  layerWeights: {
+    L1: 0.55,
+    L2: 0.3,
+    L3: 0.15,
+  },
+  closeScoreThreshold: 0.03,
+  confidenceBaseline: 100,
+  confidenceVarianceImpact: 0.4,
+  riskAdjustmentFloor: 0.7,
+  riskAdjustmentScale: 0.3,
+};
+
+const createScoresForRecord = (rfpId, vendors, criteria) => {
   const l1 = assessorsWithAssignments.flatMap((assessor) =>
     vendors.flatMap((vendor) =>
       criteria
         .filter((criterion) => criterion.layer === 'L1')
         .map((criterion) => ({
           id: newId('score'),
-          rfpId: rfps[0].id,
+          rfpId,
           vendorId: vendor.id,
           criterionId: criterion.id,
           layer: 'L1',
@@ -113,7 +134,7 @@ const scores = (() => {
       .filter((criterion) => criterion.layer !== 'L1')
       .map((criterion) => ({
         id: newId('score'),
-        rfpId: rfps[0].id,
+        rfpId,
         vendorId: vendor.id,
         criterionId: criterion.id,
         layer: criterion.layer,
@@ -125,26 +146,56 @@ const scores = (() => {
   );
 
   return [...l1, ...l2l3];
-})();
-
-const comments = [];
-const evidence = [];
-const benchmarks = [];
-const panelValidations = [];
-const auditEvents = [];
-const sessions = new Map();
-const appConfig = {
-  layerWeights: {
-    L1: 0.55,
-    L2: 0.3,
-    L3: 0.15,
-  },
-  closeScoreThreshold: 0.03,
-  confidenceBaseline: 100,
-  confidenceVarianceImpact: 0.4,
-  riskAdjustmentFloor: 0.7,
-  riskAdjustmentScale: 0.3,
 };
+
+const createRecordStore = ({
+  id,
+  title,
+  organization,
+  dueDate,
+  intakeMethod,
+  intakeStatus,
+  vendors,
+  criteria,
+}) => {
+  const createdAt = nowIso();
+  const rfp = {
+    id,
+    title,
+    createdAt,
+    primaryOwnerId: users.owner.id,
+    organization,
+    dueDate,
+    intakeMethod,
+    intakeStatus,
+    updatedAt: createdAt,
+  };
+
+  return {
+    rfp,
+    vendors,
+    criteria,
+    scores: createScoresForRecord(rfp.id, vendors, criteria),
+    comments: [],
+    evidence: [],
+    benchmarks: [],
+    panelValidations: [],
+    auditEvents: [],
+    ingestJobs: [],
+  };
+};
+
+const seedRecord = createRecordStore({
+  id: 'rfp-2026-network-modernization',
+  title: '2026 Network Modernization RFP',
+  organization: 'City Infrastructure Office',
+  dueDate: '',
+  intakeMethod: 'create',
+  intakeStatus: 'ready',
+  vendors: seedVendors,
+  criteria: seedCriteria,
+});
+records.set(seedRecord.rfp.id, seedRecord);
 
 const buildAppUsers = () => [
   users.owner,
@@ -153,6 +204,94 @@ const buildAppUsers = () => [
 ];
 
 const findUserById = (userId) => buildAppUsers().find((user) => user.id === userId);
+
+const listRfps = () => Array.from(records.values()).map((record) => record.rfp);
+
+const firstRecord = () => Array.from(records.values())[0] ?? null;
+
+const findRecordById = (rfpId) => records.get(rfpId) ?? null;
+
+const findRecordByScoreId = (scoreId) => {
+  for (const record of records.values()) {
+    const score = record.scores.find((entry) => entry.id === scoreId);
+    if (score) {
+      return { record, score };
+    }
+  }
+
+  return null;
+};
+
+const requirePrimaryOwner = (req, res) => {
+  const actor = requireAuth(req, res);
+  if (!actor) {
+    return null;
+  }
+
+  if (actor.role !== 'Primary Owner') {
+    res.status(403).json({ message: 'Only Primary Owner can perform this action.' });
+    return null;
+  }
+
+  return actor;
+};
+
+const resolveRequestedRecord = (req) => {
+  const requestedRfpId = String(req.query.rfpId || req.body.rfpId || '').trim();
+
+  if (requestedRfpId) {
+    return findRecordById(requestedRfpId);
+  }
+
+  return firstRecord();
+};
+
+const requireRecord = (record, res) => {
+  if (record) {
+    return record;
+  }
+
+  res.status(404).json({ message: 'RFP record not found.' });
+  return null;
+};
+
+const ensureL2L3Criteria = (criteria) => {
+  const next = [...criteria];
+
+  for (const criterion of defaultL2L3Criteria) {
+    if (!next.some((entry) => entry.id === criterion.id)) {
+      next.push({ ...criterion });
+    }
+  }
+
+  return next;
+};
+
+const buildIngestDraft = (fileName) => {
+  const cleaned = fileName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const suffix = cleaned || 'rfp';
+
+  return [
+    {
+      id: `l1-${suffix}-solution-architecture`,
+      layer: 'L1',
+      label: 'Solution Architecture',
+      description: `Generated from ${fileName}: architecture depth, extensibility, and technical fit.`,
+    },
+    {
+      id: `l1-${suffix}-security-and-compliance`,
+      layer: 'L1',
+      label: 'Security and Compliance',
+      description: `Generated from ${fileName}: controls, compliance coverage, and risk handling.`,
+    },
+    {
+      id: `l1-${suffix}-implementation-and-delivery`,
+      layer: 'L1',
+      label: 'Implementation and Delivery',
+      description: `Generated from ${fileName}: implementation feasibility, staffing model, and timeline confidence.`,
+    },
+  ];
+};
 
 const resolveActor = (req) => {
   const bearerToken = String(req.header('authorization') || '')
@@ -203,14 +342,176 @@ const canWriteScore = (actor, score) => {
 };
 
 app.get('/rfps', (_req, res) => {
+  const record = resolveRequestedRecord(_req);
+
+  if (!record) {
+    res.status(404).json({ message: 'No RFP records available.' });
+    return;
+  }
+
   res.json({
-    rfps,
-    vendors,
-    criteria,
+    rfps: listRfps(),
+    vendors: record.vendors,
+    criteria: record.criteria,
     assessors: users.assessors,
     panelReviewers: users.panel,
     primaryOwner: users.owner,
   });
+});
+
+app.get('/rfp-records', (_req, res) => {
+  res.json({ records: listRfps() });
+});
+
+app.post('/rfp-records', (req, res) => {
+  const actor = requirePrimaryOwner(req, res);
+  if (!actor) {
+    return;
+  }
+
+  const title = String(req.body.title || '').trim();
+  const organization = String(req.body.organization || '').trim();
+  const dueDate = String(req.body.dueDate || '').trim();
+
+  if (!title || !organization || !dueDate) {
+    res.status(400).json({ message: 'title, organization, and dueDate are required.' });
+    return;
+  }
+
+  const record = createRecordStore({
+    id: newId('rfp'),
+    title,
+    organization,
+    dueDate,
+    intakeMethod: 'create',
+    intakeStatus: 'draft',
+    vendors: [],
+    criteria: [],
+  });
+
+  records.set(record.rfp.id, record);
+  res.status(201).json({ record: record.rfp });
+});
+
+app.get('/rfp-records/:rfpId', (req, res) => {
+  const record = findRecordById(req.params.rfpId);
+  if (!requireRecord(record, res)) {
+    return;
+  }
+
+  res.json({ record: record.rfp });
+});
+
+app.post('/rfp-records/:rfpId/ingest-jobs', (req, res) => {
+  const actor = requirePrimaryOwner(req, res);
+  if (!actor) {
+    return;
+  }
+
+  const record = findRecordById(req.params.rfpId);
+  if (!requireRecord(record, res)) {
+    return;
+  }
+
+  const fileName = String(req.body.fileName || '').trim();
+  const fileType = String(req.body.fileType || '').trim();
+
+  if (!fileName || !fileType) {
+    res.status(400).json({ message: 'fileName and fileType are required.' });
+    return;
+  }
+
+  const createdAt = nowIso();
+  const job = {
+    id: newId('ingest-job'),
+    rfpId: record.rfp.id,
+    status: 'queued',
+    fileName,
+    fileType,
+    createdAt,
+    updatedAt: createdAt,
+    generatedL1Draft: [],
+  };
+
+  record.ingestJobs.push(job);
+  record.rfp.intakeMethod = 'ingest';
+  record.rfp.intakeStatus = 'ingesting';
+  record.rfp.updatedAt = nowIso();
+
+  setTimeout(() => {
+    const liveRecord = findRecordById(record.rfp.id);
+    const liveJob = liveRecord?.ingestJobs.find((entry) => entry.id === job.id);
+
+    if (!liveRecord || !liveJob) {
+      return;
+    }
+
+    liveJob.status = 'processing';
+    liveJob.updatedAt = nowIso();
+
+    setTimeout(() => {
+      const nextRecord = findRecordById(record.rfp.id);
+      const nextJob = nextRecord?.ingestJobs.find((entry) => entry.id === job.id);
+
+      if (!nextRecord || !nextJob) {
+        return;
+      }
+
+      nextJob.status = 'ready';
+      nextJob.generatedL1Draft = buildIngestDraft(nextJob.fileName);
+      nextJob.updatedAt = nowIso();
+      nextRecord.rfp.intakeStatus = 'ready';
+      nextRecord.rfp.updatedAt = nowIso();
+    }, 900);
+  }, 450);
+
+  res.status(201).json({ job });
+});
+
+app.get('/rfp-records/:rfpId/ingest-jobs/:jobId', (req, res) => {
+  const record = findRecordById(req.params.rfpId);
+  if (!requireRecord(record, res)) {
+    return;
+  }
+
+  const job = record.ingestJobs.find((entry) => entry.id === req.params.jobId);
+  if (!job) {
+    res.status(404).json({ message: 'Ingest job not found.' });
+    return;
+  }
+
+  res.json({ job });
+});
+
+app.post('/rfp-records/:rfpId/ingest-jobs/:jobId/apply-l1-draft', (req, res) => {
+  const actor = requirePrimaryOwner(req, res);
+  if (!actor) {
+    return;
+  }
+
+  const record = findRecordById(req.params.rfpId);
+  if (!requireRecord(record, res)) {
+    return;
+  }
+
+  const job = record.ingestJobs.find((entry) => entry.id === req.params.jobId);
+  if (!job) {
+    res.status(404).json({ message: 'Ingest job not found.' });
+    return;
+  }
+
+  if (job.status !== 'ready') {
+    res.status(400).json({ message: 'Ingest job is not ready to apply.' });
+    return;
+  }
+
+  const l1Criteria = job.generatedL1Draft.map((criterion) => ({ ...criterion }));
+  record.criteria = ensureL2L3Criteria(l1Criteria);
+  record.scores = createScoresForRecord(record.rfp.id, record.vendors, record.criteria);
+  record.rfp.intakeStatus = 'ready';
+  record.rfp.updatedAt = nowIso();
+
+  res.status(201).json({ criteria: l1Criteria });
 });
 
 app.get('/auth/users', (_req, res) => {
@@ -289,9 +590,12 @@ app.put('/config', (req, res) => {
 });
 
 app.get('/scores', (req, res) => {
-  const rfpId = String(req.query.rfpId || '');
-  const filtered = rfpId ? scores.filter((entry) => entry.rfpId === rfpId) : scores;
-  res.json({ scores: filtered });
+  const record = resolveRequestedRecord(req);
+  if (!requireRecord(record, res)) {
+    return;
+  }
+
+  res.json({ scores: record.scores });
 });
 
 app.put('/scores/:scoreId', (req, res) => {
@@ -299,12 +603,14 @@ app.put('/scores/:scoreId', (req, res) => {
   if (!actor) {
     return;
   }
-  const score = scores.find((entry) => entry.id === req.params.scoreId);
+  const match = findRecordByScoreId(req.params.scoreId);
 
-  if (!score) {
+  if (!match) {
     res.status(404).json({ message: 'Score not found.' });
     return;
   }
+
+  const { record, score } = match;
 
   if (!canWriteScore(actor, score)) {
     res.status(403).json({ message: 'Not authorized to update this score.' });
@@ -333,21 +639,27 @@ app.put('/scores/:scoreId', (req, res) => {
   score.comment = nextComment;
   score.updatedAt = auditEvent.changedAt;
 
-  auditEvents.push(auditEvent);
+  record.auditEvents.push(auditEvent);
 
   res.json({ score, auditEvent });
 });
 
 app.get('/audit', (req, res) => {
-  const rfpId = String(req.query.rfpId || '');
-  const filtered = rfpId ? auditEvents.filter((entry) => entry.rfpId === rfpId) : auditEvents;
-  res.json({ events: filtered });
+  const record = resolveRequestedRecord(req);
+  if (!requireRecord(record, res)) {
+    return;
+  }
+
+  res.json({ events: record.auditEvents });
 });
 
 app.get('/comments', (req, res) => {
-  const rfpId = String(req.query.rfpId || '');
-  const filtered = rfpId ? comments.filter((entry) => entry.rfpId === rfpId) : comments;
-  res.json({ comments: filtered });
+  const record = resolveRequestedRecord(req);
+  if (!requireRecord(record, res)) {
+    return;
+  }
+
+  res.json({ comments: record.comments });
 });
 
 app.post('/comments', (req, res) => {
@@ -356,9 +668,14 @@ app.post('/comments', (req, res) => {
     return;
   }
 
+  const record = findRecordById(String(req.body.rfpId || '').trim());
+  if (!requireRecord(record, res)) {
+    return;
+  }
+
   const comment = {
     id: newId('comment'),
-    rfpId: String(req.body.rfpId || ''),
+    rfpId: record.rfp.id,
     vendorId: String(req.body.vendorId || ''),
     criterionId: String(req.body.criterionId || ''),
     scope: String(req.body.scope || 'general'),
@@ -368,14 +685,17 @@ app.post('/comments', (req, res) => {
     createdAt: nowIso(),
   };
 
-  comments.push(comment);
+  record.comments.push(comment);
   res.status(201).json({ comment });
 });
 
 app.get('/panel-validations', (req, res) => {
-  const rfpId = String(req.query.rfpId || '');
-  const filtered = rfpId ? panelValidations.filter((entry) => entry.rfpId === rfpId) : panelValidations;
-  res.json({ validations: filtered });
+  const record = resolveRequestedRecord(req);
+  if (!requireRecord(record, res)) {
+    return;
+  }
+
+  res.json({ validations: record.panelValidations });
 });
 
 app.post('/panel-validations', (req, res) => {
@@ -404,7 +724,9 @@ app.post('/panel-validations', (req, res) => {
     return;
   }
 
-  if (!rfps.some((entry) => entry.id === rfpId)) {
+  const record = findRecordById(rfpId);
+
+  if (!record) {
     res.status(400).json({ message: 'Unknown rfpId.' });
     return;
   }
@@ -414,7 +736,7 @@ app.post('/panel-validations', (req, res) => {
     return;
   }
 
-  if (!vendors.some((entry) => entry.id === vendorId)) {
+  if (!record.vendors.some((entry) => entry.id === vendorId)) {
     res.status(400).json({ message: 'Unknown vendorId.' });
     return;
   }
@@ -439,14 +761,17 @@ app.post('/panel-validations', (req, res) => {
     createdAt: nowIso(),
   };
 
-  panelValidations.push(validation);
+  record.panelValidations.push(validation);
   res.status(201).json({ validation });
 });
 
 app.get('/evidence', (req, res) => {
-  const rfpId = String(req.query.rfpId || '');
-  const filtered = rfpId ? evidence.filter((entry) => entry.rfpId === rfpId) : evidence;
-  res.json({ evidence: filtered });
+  const record = resolveRequestedRecord(req);
+  if (!requireRecord(record, res)) {
+    return;
+  }
+
+  res.json({ evidence: record.evidence });
 });
 
 app.post('/evidence', (req, res) => {
@@ -460,9 +785,14 @@ app.post('/evidence', (req, res) => {
     return;
   }
 
+  const record = findRecordById(String(req.body.rfpId || '').trim());
+  if (!requireRecord(record, res)) {
+    return;
+  }
+
   const item = {
     id: newId('evidence'),
-    rfpId: String(req.body.rfpId || ''),
+    rfpId: record.rfp.id,
     vendorId: String(req.body.vendorId || ''),
     criterionId: String(req.body.criterionId || ''),
     title: String(req.body.title || ''),
@@ -472,18 +802,27 @@ app.post('/evidence', (req, res) => {
     addedAt: nowIso(),
   };
 
-  evidence.push(item);
+  record.evidence.push(item);
   res.status(201).json({ evidence: item });
 });
 
 app.get('/rfps/:rfpId/benchmarks', (req, res) => {
-  const filtered = benchmarks.filter((entry) => entry.rfpId === req.params.rfpId);
-  res.json({ benchmarks: filtered });
+  const record = findRecordById(req.params.rfpId);
+  if (!requireRecord(record, res)) {
+    return;
+  }
+
+  res.json({ benchmarks: record.benchmarks });
 });
 
 app.post('/rfps/:rfpId/benchmarks', (req, res) => {
+  const record = findRecordById(req.params.rfpId);
+  if (!requireRecord(record, res)) {
+    return;
+  }
+
   const incoming = Array.isArray(req.body.benchmarks) ? req.body.benchmarks : [];
-  const retained = benchmarks.filter((entry) => entry.rfpId !== req.params.rfpId);
+  const retained = [];
 
   for (const item of incoming) {
     retained.push({
@@ -494,8 +833,8 @@ app.post('/rfps/:rfpId/benchmarks', (req, res) => {
     });
   }
 
-  benchmarks.splice(0, benchmarks.length, ...retained);
-  res.status(201).json({ benchmarks: benchmarks.filter((entry) => entry.rfpId === req.params.rfpId) });
+  record.benchmarks.splice(0, record.benchmarks.length, ...retained);
+  res.status(201).json({ benchmarks: record.benchmarks });
 });
 
 app.listen(port, () => {

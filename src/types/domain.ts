@@ -41,6 +41,30 @@ export interface Rfp {
   title: string;
   createdAt: string;
   primaryOwnerId: string;
+  organization?: string;
+  dueDate?: string;
+  intakeMethod?: 'create' | 'ingest';
+  intakeStatus?: 'draft' | 'ingesting' | 'ready' | 'failed';
+  updatedAt?: string;
+}
+
+export interface RfpIngestDraftCriterion {
+  id: string;
+  layer: LayerId;
+  label: string;
+  description: string;
+}
+
+export interface RfpIngestJob {
+  id: string;
+  rfpId: string;
+  status: 'queued' | 'processing' | 'ready' | 'failed';
+  fileName: string;
+  fileType: string;
+  createdAt: string;
+  updatedAt: string;
+  errorMessage?: string;
+  generatedL1Draft: RfpIngestDraftCriterion[];
 }
 
 export interface ScoreEntry {
