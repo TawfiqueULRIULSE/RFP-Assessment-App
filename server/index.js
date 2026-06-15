@@ -352,40 +352,42 @@ const ensureL2L3Criteria = (criteria) => {
 
 // ─── File parsing and L1 draft extraction ────────────────────────────────────
 
+/** Multer generates filenames as random hex strings; anything else is invalid. */
+const SAFE_UPLOAD_FILENAME_RE = /^[0-9a-f]+$/i;
+
 /**
- * Ensure a file path is within the uploads directory to prevent path traversal.
- * Returns the resolved absolute path.
+ * Build the absolute path for a stored upload filename.
+ * Rejects filenames that are not valid multer-generated hex names.
  */
-const assertSafeUploadPath = (filePath) => {
-  const resolved = path.resolve(filePath);
-  const uploadsBase = path.resolve(UPLOADS_DIR);
-  if (resolved !== uploadsBase && !resolved.startsWith(uploadsBase + path.sep)) {
-    throw new Error('Invalid file path: outside uploads directory');
+const resolveUploadPath = (filename) => {
+  if (!SAFE_UPLOAD_FILENAME_RE.test(filename)) {
+    throw new Error('Invalid upload filename');
   }
-  return resolved;
+  return path.join(UPLOADS_DIR, filename);
 };
 
 /**
  * Extract plain text from an uploaded file based on its MIME type.
- * Returns the extracted text string.
+ * @param {string} filename - The multer-generated filename (hex, no path separators).
  */
-const extractTextFromFile = async (filePath, mimeType) => {
-  const safePath = assertSafeUploadPath(filePath);
+const extractTextFromFile = async (filename, mimeType) => {
+  // Build path from server-controlled UPLOADS_DIR + validated filename only.
+  const filePath = resolveUploadPath(filename);
 
   if (mimeType === 'text/plain') {
-    return fs.readFileSync(safePath, 'utf8');
+    return fs.readFileSync(filePath, 'utf8');
   }
 
   if (
     mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
     mimeType === 'application/msword'
   ) {
-    const result = await mammoth.extractRawText({ path: safePath });
+    const result = await mammoth.extractRawText({ path: filePath });
     return result.value;
   }
 
   if (mimeType === 'application/pdf') {
-    const buffer = fs.readFileSync(safePath);
+    const buffer = fs.readFileSync(filePath);
     const data = await pdfParse(buffer);
     return data.text;
   }
@@ -430,11 +432,16 @@ const L1_CATEGORIES = [
  * Analyse extracted text and return candidate L1 draft criteria.
  * Uses keyword matching against common RFP evaluation categories.
  */
+const MIN_LINE_LENGTH = 20;  // skip fragment lines too short to be meaningful
+const MAX_LINE_LENGTH = 400; // skip overly long paragraphs unlikely to be criteria
+const MAX_DRAFT_CRITERIA = 5; // maximum L1 criteria to generate from a document
+const MIN_DRAFT_CRITERIA = 3; // minimum L1 criteria to ensure a usable draft
+
 const extractL1DraftFromText = (text) => {
   const lines = text
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter((line) => line.length > 20 && line.length < 400);
+    .filter((line) => line.length > MIN_LINE_LENGTH && line.length < MAX_LINE_LENGTH);
 
   const requirementLines = lines.filter((line) =>
     /\b(shall|must|required?|criteria|evaluation|technical|security|compliance|delivery|implementation|architecture|performance|functional|support|experience|capability)\b/i.test(
@@ -446,7 +453,7 @@ const extractL1DraftFromText = (text) => {
   const usedIds = new Set();
 
   for (const category of L1_CATEGORIES) {
-    if (draft.length >= 5) {
+    if (draft.length >= MAX_DRAFT_CRITERIA) {
       break;
     }
 
@@ -468,9 +475,9 @@ const extractL1DraftFromText = (text) => {
     usedIds.add(category.id);
   }
 
-  // Ensure at least 3 criteria using defaults for any missing categories
+  // Ensure at least MIN_DRAFT_CRITERIA criteria using defaults for any missing categories
   for (const category of L1_CATEGORIES) {
-    if (draft.length >= 3) {
+    if (draft.length >= MIN_DRAFT_CRITERIA) {
       break;
     }
 
@@ -490,8 +497,9 @@ const extractL1DraftFromText = (text) => {
 /**
  * Run the full ingest pipeline for a job:
  * queued → processing → ready | failed
+ * @param {string} filename - The multer-generated upload filename (hex, no directory).
  */
-const runIngestPipeline = async (rfpId, jobId, filePath, mimeType) => {
+const runIngestPipeline = async (rfpId, jobId, filename, mimeType) => {
   const liveRecord = findRecordById(rfpId);
   const liveJob = liveRecord?.ingestJobs.find((entry) => entry.id === jobId);
 
@@ -505,7 +513,7 @@ const runIngestPipeline = async (rfpId, jobId, filePath, mimeType) => {
   saveState();
 
   try {
-    const text = await extractTextFromFile(filePath, mimeType);
+    const text = await extractTextFromFile(filename, mimeType);
     const draft = extractL1DraftFromText(text);
 
     liveJob.status = 'ready';
@@ -520,12 +528,12 @@ const runIngestPipeline = async (rfpId, jobId, filePath, mimeType) => {
     liveRecord.rfp.intakeStatus = 'failed';
     liveRecord.rfp.updatedAt = nowIso();
   } finally {
-    // Clean up uploaded file
+    // Clean up the uploaded file using a server-controlled path
     try {
-      const safePath = assertSafeUploadPath(filePath);
-      fs.unlinkSync(safePath);
-    } catch {
-      // Ignore cleanup errors
+      fs.unlinkSync(resolveUploadPath(filename));
+    } catch (cleanupErr) {
+      // eslint-disable-next-line no-console
+      console.error('[ingest] Failed to clean up uploaded file:', cleanupErr.message);
     }
     saveState();
   }
@@ -660,7 +668,7 @@ app.post('/rfp-records/:rfpId/ingest-jobs', (req, res, next) => {
     const actor = requirePrimaryOwner(req, res);
     if (!actor) {
       if (req.file) {
-        try { fs.unlinkSync(assertSafeUploadPath(req.file.path)); } catch { /* ignore */ }
+        try { fs.unlinkSync(resolveUploadPath(req.file.filename)); } catch { /* ignore */ }
       }
       return;
     }
@@ -668,7 +676,7 @@ app.post('/rfp-records/:rfpId/ingest-jobs', (req, res, next) => {
     const record = findRecordById(req.params.rfpId);
     if (!requireRecord(record, res)) {
       if (req.file) {
-        try { fs.unlinkSync(assertSafeUploadPath(req.file.path)); } catch { /* ignore */ }
+        try { fs.unlinkSync(resolveUploadPath(req.file.filename)); } catch { /* ignore */ }
       }
       return;
     }
@@ -680,6 +688,8 @@ app.post('/rfp-records/:rfpId/ingest-jobs', (req, res, next) => {
 
     const fileName = req.file.originalname || req.file.filename;
     const fileType = req.file.mimetype;
+    // Use only the multer-generated filename (hex), never the full path from req.file.path
+    const storedFilename = req.file.filename;
 
     const createdAt = nowIso();
     const job = {
@@ -702,7 +712,7 @@ app.post('/rfp-records/:rfpId/ingest-jobs', (req, res, next) => {
 
     // Kick off async pipeline without blocking the response
     setImmediate(() => {
-      void runIngestPipeline(record.rfp.id, job.id, req.file.path, fileType);
+      void runIngestPipeline(record.rfp.id, job.id, storedFilename, fileType);
     });
 
     res.status(201).json({ job });

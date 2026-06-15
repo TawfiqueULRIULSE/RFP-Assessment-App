@@ -244,7 +244,7 @@ export function IntakeFrontDoor({
             <input
               type="file"
               required
-              accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+              accept="application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
               onChange={(event) => {
                 const file = event.target.files?.[0] ?? null;
                 setIngestFile(file);
