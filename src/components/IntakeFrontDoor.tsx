@@ -14,8 +14,7 @@ interface IntakeFrontDoorProps {
     title: string;
     organization: string;
     dueDate: string;
-    fileName: string;
-    fileType: string;
+    file: File;
   }) => Promise<{ record: Rfp; job: RfpIngestJob }>;
   onPollIngestJob: (rfpId: string, jobId: string) => Promise<RfpIngestJob>;
   onApplyIngestDraft: (rfpId: string, jobId: string) => Promise<void>;
@@ -32,8 +31,6 @@ const emptyIngestForm = {
   title: '',
   organization: '',
   dueDate: '',
-  fileName: '',
-  fileType: 'application/pdf',
 };
 
 const toReadableStatus = (status?: string) => {
@@ -56,6 +53,7 @@ export function IntakeFrontDoor({
 }: IntakeFrontDoorProps) {
   const [createForm, setCreateForm] = useState(emptyCreateForm);
   const [ingestForm, setIngestForm] = useState(emptyIngestForm);
+  const [ingestFile, setIngestFile] = useState<File | null>(null);
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false);
   const [isSubmittingIngest, setIsSubmittingIngest] = useState(false);
   const [isApplyingDraft, setIsApplyingDraft] = useState(false);
@@ -176,14 +174,20 @@ export function IntakeFrontDoor({
           onSubmit={(event) => {
             event.preventDefault();
 
+            if (!ingestFile) {
+              onError('Please select a file to ingest.');
+              return;
+            }
+
             void (async () => {
               setIsSubmittingIngest(true);
 
               try {
-                const started = await onStartIngest(ingestForm);
+                const started = await onStartIngest({ ...ingestForm, file: ingestFile });
                 onSelectRfp(started.record.id);
                 setActiveJob({ rfpId: started.record.id, job: started.job });
                 setIngestForm(emptyIngestForm);
+                setIngestFile(null);
               } catch (error) {
                 onError(error instanceof Error ? error.message : 'Unable to start ingest workflow.');
               } finally {
@@ -236,38 +240,19 @@ export function IntakeFrontDoor({
             />
           </label>
           <label>
-            Source file name
+            RFP document
             <input
-              type="text"
+              type="file"
               required
-              placeholder="example-rfp.pdf"
-              value={ingestForm.fileName}
-              onChange={(event) =>
-                setIngestForm((current) => ({
-                  ...current,
-                  fileName: event.target.value,
-                }))
-              }
+              accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+              onChange={(event) => {
+                const file = event.target.files?.[0] ?? null;
+                setIngestFile(file);
+              }}
             />
+            <small className="muted">PDF, DOCX, or TXT — max 10 MB</small>
           </label>
-          <label>
-            Source file type
-            <select
-              value={ingestForm.fileType}
-              onChange={(event) =>
-                setIngestForm((current) => ({
-                  ...current,
-                  fileType: event.target.value,
-                }))
-              }
-            >
-              <option value="application/pdf">PDF</option>
-              <option value="application/msword">DOC</option>
-              <option value="application/vnd.openxmlformats-officedocument.wordprocessingml.document">DOCX</option>
-              <option value="text/plain">TXT</option>
-            </select>
-          </label>
-          <button type="submit" disabled={isSubmittingIngest}>
+          <button type="submit" disabled={isSubmittingIngest || !ingestFile}>
             {isSubmittingIngest ? 'Starting ingest...' : 'Create + ingest'}
           </button>
         </form>
@@ -329,7 +314,7 @@ export function IntakeFrontDoor({
             </>
           )}
           {activeJob.job.status === 'failed' && (
-            <p className="muted">{activeJob.job.errorMessage ?? 'Ingest failed. Try another file.'}</p>
+            <p className="muted">{activeJob.job.failureReason ?? 'Ingest failed. Try another file.'}</p>
           )}
         </section>
       )}

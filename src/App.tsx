@@ -487,8 +487,7 @@ function App() {
     title: string;
     organization: string;
     dueDate: string;
-    fileName: string;
-    fileType: string;
+    file: File;
   }): Promise<{ record: Rfp; job: RfpIngestJob }> => {
     const created = await handleCreateRecord({
       title: input.title,
@@ -496,10 +495,7 @@ function App() {
       dueDate: input.dueDate,
     });
 
-    const job = await startRfpIngestJob(created.id, {
-      fileName: input.fileName,
-      fileType: input.fileType,
-    });
+    const job = await startRfpIngestJob(created.id, input.file);
 
     return { record: created, job };
   };

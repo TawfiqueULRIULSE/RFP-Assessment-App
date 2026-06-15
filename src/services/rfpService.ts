@@ -63,15 +63,15 @@ export const fetchRfpRecordDetail = async (rfpId: string): Promise<Rfp> => {
   return response.record;
 };
 
-export const startRfpIngestJob = async (
-  rfpId: string,
-  input: { fileName: string; fileType: string },
-): Promise<RfpIngestJob> => {
+export const startRfpIngestJob = async (rfpId: string, file: File): Promise<RfpIngestJob> => {
+  const formData = new FormData();
+  formData.append('file', file);
+
   const response = await apiRequest<RfpIngestJobResponse>(
     `/rfp-records/${encodeURIComponent(rfpId)}/ingest-jobs`,
     {
       method: 'POST',
-      body: JSON.stringify(input),
+      body: formData,
     },
   );
 
