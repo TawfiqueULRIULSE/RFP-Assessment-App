@@ -97,7 +97,7 @@ export function PanelValidationView({
 
       const approvals = latestByReviewer.filter((entry) => entry.decision === 'approved').length;
       const hasCommented = latestByReviewer.some((entry) => entry.decision === 'commented');
-      let status: VendorValidationState = 'Pending';
+      let status: VendorValidationState;
 
       if (latestByReviewer.length === 0) {
         status = 'Pending';

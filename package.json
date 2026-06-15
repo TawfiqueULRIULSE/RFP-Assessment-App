@@ -8,7 +8,9 @@
     "dev:web": "vite",
     "dev:api": "node server/index.js",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src"
   },
   "dependencies": {
     "cors": "^2.8.6",
@@ -18,11 +20,16 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "concurrently": "^10.0.3",
+    "eslint": "^10.5.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.6.0",
     "typescript": "^5.5.4",
+    "typescript-eslint": "^8.61.1",
     "vite": "^5.4.0"
   }
 }

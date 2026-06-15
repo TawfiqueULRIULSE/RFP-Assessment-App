@@ -34,7 +34,7 @@ export interface Assessor extends User {
   assignedCriterionIds: string[];
 }
 
-export interface PanelReviewer extends User {}
+export type PanelReviewer = User;
 
 export interface Rfp {
   id: string;
