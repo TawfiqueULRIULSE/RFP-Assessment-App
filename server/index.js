@@ -176,6 +176,23 @@ const stmts = {
     INSERT INTO sessions (token, user_id, role, created_at) VALUES (?, ?, ?, ?)
   `),
   deleteSession: db.prepare('DELETE FROM sessions WHERE token = ?'),
+  findSession: db.prepare('SELECT * FROM sessions WHERE token = ?'),
+  findRfp: db.prepare('SELECT * FROM rfps WHERE id = ?'),
+  findRfpId: db.prepare('SELECT id FROM rfps WHERE id = ?'),
+  listAllRfps: db.prepare('SELECT * FROM rfps'),
+  firstRfpId: db.prepare('SELECT id FROM rfps LIMIT 1'),
+  listVendors: db.prepare('SELECT * FROM vendors WHERE rfp_id = ?'),
+  listCriteria: db.prepare('SELECT * FROM criteria WHERE rfp_id = ?'),
+  listScores: db.prepare('SELECT * FROM scores WHERE rfp_id = ?'),
+  listComments: db.prepare('SELECT * FROM comments WHERE rfp_id = ?'),
+  listEvidence: db.prepare('SELECT * FROM evidence WHERE rfp_id = ?'),
+  listBenchmarks: db.prepare('SELECT * FROM benchmarks WHERE rfp_id = ?'),
+  listPanelValidations: db.prepare('SELECT * FROM panel_validations WHERE rfp_id = ?'),
+  listAuditEvents: db.prepare('SELECT * FROM audit_events WHERE rfp_id = ?'),
+  listIngestJobs: db.prepare('SELECT * FROM ingest_jobs WHERE rfp_id = ?'),
+  findScore: db.prepare('SELECT * FROM scores WHERE id = ?'),
+  findIngestJob: db.prepare('SELECT * FROM ingest_jobs WHERE id = ? AND rfp_id = ?'),
+  getConfig: db.prepare('SELECT * FROM app_config WHERE id = 1'),
   updateConfig: db.prepare(`
     UPDATE app_config
     SET layer_weights=?, close_score_threshold=?, confidence_baseline=?,
@@ -219,28 +236,28 @@ const buildAppUsers = () => [
 
 const findUserById = (userId) => buildAppUsers().find((user) => user.id === userId);
 
-const listRfps = () => db.prepare('SELECT * FROM rfps').all().map(rfpFromRow);
+const listRfps = () => stmts.listAllRfps.all().map(rfpFromRow);
 
 const firstRfpId = () => {
-  const row = db.prepare('SELECT id FROM rfps LIMIT 1').get();
+  const row = stmts.firstRfpId.get();
   return row?.id ?? null;
 };
 
 const loadRecord = (rfpId) => {
-  const rfpRow = db.prepare('SELECT * FROM rfps WHERE id = ?').get(rfpId);
+  const rfpRow = stmts.findRfp.get(rfpId);
   if (!rfpRow) return null;
 
   return {
     rfp: rfpFromRow(rfpRow),
-    vendors: db.prepare('SELECT * FROM vendors WHERE rfp_id = ?').all(rfpId).map(vendorFromRow),
-    criteria: db.prepare('SELECT * FROM criteria WHERE rfp_id = ?').all(rfpId).map(criterionFromRow),
-    scores: db.prepare('SELECT * FROM scores WHERE rfp_id = ?').all(rfpId).map(scoreFromRow),
-    comments: db.prepare('SELECT * FROM comments WHERE rfp_id = ?').all(rfpId).map(commentFromRow),
-    evidence: db.prepare('SELECT * FROM evidence WHERE rfp_id = ?').all(rfpId).map(evidenceFromRow),
-    benchmarks: db.prepare('SELECT * FROM benchmarks WHERE rfp_id = ?').all(rfpId).map(benchmarkFromRow),
-    panelValidations: db.prepare('SELECT * FROM panel_validations WHERE rfp_id = ?').all(rfpId).map(panelValidationFromRow),
-    auditEvents: db.prepare('SELECT * FROM audit_events WHERE rfp_id = ?').all(rfpId).map(auditEventFromRow),
-    ingestJobs: db.prepare('SELECT * FROM ingest_jobs WHERE rfp_id = ?').all(rfpId).map(ingestJobFromRow),
+    vendors: stmts.listVendors.all(rfpId).map(vendorFromRow),
+    criteria: stmts.listCriteria.all(rfpId).map(criterionFromRow),
+    scores: stmts.listScores.all(rfpId).map(scoreFromRow),
+    comments: stmts.listComments.all(rfpId).map(commentFromRow),
+    evidence: stmts.listEvidence.all(rfpId).map(evidenceFromRow),
+    benchmarks: stmts.listBenchmarks.all(rfpId).map(benchmarkFromRow),
+    panelValidations: stmts.listPanelValidations.all(rfpId).map(panelValidationFromRow),
+    auditEvents: stmts.listAuditEvents.all(rfpId).map(auditEventFromRow),
+    ingestJobs: stmts.listIngestJobs.all(rfpId).map(ingestJobFromRow),
   };
 };
 
@@ -323,7 +340,7 @@ const resolveActor = (req) => {
     .trim();
 
   if (bearerToken) {
-    const session = db.prepare('SELECT * FROM sessions WHERE token = ?').get(bearerToken);
+    const session = stmts.findSession.get(bearerToken);
     if (session) {
       return {
         id: session.user_id,
@@ -439,7 +456,7 @@ app.post('/rfp-records/:rfpId/ingest-jobs', (req, res) => {
     return;
   }
 
-  const rfpRow = db.prepare('SELECT * FROM rfps WHERE id = ?').get(req.params.rfpId);
+  const rfpRow = stmts.findRfp.get(req.params.rfpId);
   if (!rfpRow) {
     res.status(404).json({ message: 'RFP record not found.' });
     return;
@@ -485,13 +502,13 @@ app.post('/rfp-records/:rfpId/ingest-jobs', (req, res) => {
 });
 
 app.get('/rfp-records/:rfpId/ingest-jobs/:jobId', (req, res) => {
-  const rfpRow = db.prepare('SELECT id FROM rfps WHERE id = ?').get(req.params.rfpId);
+  const rfpRow = stmts.findRfpId.get(req.params.rfpId);
   if (!rfpRow) {
     res.status(404).json({ message: 'RFP record not found.' });
     return;
   }
 
-  const jobRow = db.prepare('SELECT * FROM ingest_jobs WHERE id = ? AND rfp_id = ?')
+  const jobRow = stmts.findIngestJob
     .get(req.params.jobId, req.params.rfpId);
   if (!jobRow) {
     res.status(404).json({ message: 'Ingest job not found.' });
@@ -507,13 +524,13 @@ app.post('/rfp-records/:rfpId/ingest-jobs/:jobId/apply-l1-draft', (req, res) => 
     return;
   }
 
-  const rfpRow = db.prepare('SELECT * FROM rfps WHERE id = ?').get(req.params.rfpId);
+  const rfpRow = stmts.findRfp.get(req.params.rfpId);
   if (!rfpRow) {
     res.status(404).json({ message: 'RFP record not found.' });
     return;
   }
 
-  const jobRow = db.prepare('SELECT * FROM ingest_jobs WHERE id = ? AND rfp_id = ?')
+  const jobRow = stmts.findIngestJob
     .get(req.params.jobId, req.params.rfpId);
   if (!jobRow) {
     res.status(404).json({ message: 'Ingest job not found.' });
@@ -528,7 +545,7 @@ app.post('/rfp-records/:rfpId/ingest-jobs/:jobId/apply-l1-draft', (req, res) => 
   const generatedL1Draft = JSON.parse(jobRow.generated_l1_draft || '[]');
   const l1Criteria = generatedL1Draft.map((criterion) => ({ ...criterion }));
   const allCriteria = ensureL2L3Criteria(l1Criteria);
-  const vendors = db.prepare('SELECT * FROM vendors WHERE rfp_id = ?').all(req.params.rfpId).map(vendorFromRow);
+  const vendors = stmts.listVendors.all(req.params.rfpId).map(vendorFromRow);
 
   const applyDraft = db.transaction(() => {
     stmts.deleteCriteria.run(req.params.rfpId);
@@ -589,7 +606,7 @@ app.post('/auth/logout', (req, res) => {
 });
 
 app.get('/config', (_req, res) => {
-  const row = db.prepare('SELECT * FROM app_config WHERE id = 1').get();
+  const row = stmts.getConfig.get();
   res.json({ config: configFromRow(row) });
 });
 
@@ -600,7 +617,7 @@ app.put('/config', (req, res) => {
     return;
   }
 
-  const current = configFromRow(db.prepare('SELECT * FROM app_config WHERE id = 1').get());
+  const current = configFromRow(stmts.getConfig.get());
 
   const next = {
     layerWeights: current.layerWeights,
@@ -646,7 +663,7 @@ app.put('/scores/:scoreId', (req, res) => {
     return;
   }
 
-  const scoreRow = db.prepare('SELECT * FROM scores WHERE id = ?').get(req.params.scoreId);
+  const scoreRow = stmts.findScore.get(req.params.scoreId);
   if (!scoreRow) {
     res.status(404).json({ message: 'Score not found.' });
     return;
@@ -715,7 +732,7 @@ app.post('/comments', (req, res) => {
   }
 
   const rfpId = String(req.body.rfpId || '').trim();
-  const rfpRow = db.prepare('SELECT id FROM rfps WHERE id = ?').get(rfpId);
+  const rfpRow = stmts.findRfpId.get(rfpId);
   if (!rfpRow) {
     res.status(404).json({ message: 'RFP record not found.' });
     return;
@@ -840,7 +857,7 @@ app.post('/evidence', (req, res) => {
   }
 
   const rfpId = String(req.body.rfpId || '').trim();
-  const rfpRow = db.prepare('SELECT id FROM rfps WHERE id = ?').get(rfpId);
+  const rfpRow = stmts.findRfpId.get(rfpId);
   if (!rfpRow) {
     res.status(404).json({ message: 'RFP record not found.' });
     return;
@@ -866,19 +883,19 @@ app.post('/evidence', (req, res) => {
 });
 
 app.get('/rfps/:rfpId/benchmarks', (req, res) => {
-  const rfpRow = db.prepare('SELECT id FROM rfps WHERE id = ?').get(req.params.rfpId);
+  const rfpRow = stmts.findRfpId.get(req.params.rfpId);
   if (!rfpRow) {
     res.status(404).json({ message: 'RFP record not found.' });
     return;
   }
 
-  const benchmarks = db.prepare('SELECT * FROM benchmarks WHERE rfp_id = ?')
+  const benchmarks = stmts.listBenchmarks
     .all(req.params.rfpId).map(benchmarkFromRow);
   res.json({ benchmarks });
 });
 
 app.post('/rfps/:rfpId/benchmarks', (req, res) => {
-  const rfpRow = db.prepare('SELECT id FROM rfps WHERE id = ?').get(req.params.rfpId);
+  const rfpRow = stmts.findRfpId.get(req.params.rfpId);
   if (!rfpRow) {
     res.status(404).json({ message: 'RFP record not found.' });
     return;

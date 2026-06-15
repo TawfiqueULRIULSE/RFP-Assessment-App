@@ -219,7 +219,11 @@ export function evidenceFromRow(row) {
 }
 
 export function benchmarkFromRow(row) {
-  return JSON.parse(row.data);
+  try {
+    return JSON.parse(row.data);
+  } catch {
+    return { id: row.id, rfpId: row.rfp_id };
+  }
 }
 
 export function panelValidationFromRow(row) {
@@ -252,21 +256,33 @@ export function auditEventFromRow(row) {
 }
 
 export function ingestJobFromRow(row) {
+  let generatedL1Draft = [];
+  try {
+    generatedL1Draft = JSON.parse(row.generated_l1_draft || '[]');
+  } catch {
+    generatedL1Draft = [];
+  }
   return {
     id: row.id,
     rfpId: row.rfp_id,
     status: row.status,
     fileName: row.file_name,
     fileType: row.file_type,
-    generatedL1Draft: JSON.parse(row.generated_l1_draft || '[]'),
+    generatedL1Draft,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
 export function configFromRow(row) {
+  let layerWeights = { L1: 0.55, L2: 0.3, L3: 0.15 };
+  try {
+    layerWeights = JSON.parse(row.layer_weights);
+  } catch {
+    layerWeights = { L1: 0.55, L2: 0.3, L3: 0.15 };
+  }
   return {
-    layerWeights: JSON.parse(row.layer_weights),
+    layerWeights,
     closeScoreThreshold: row.close_score_threshold,
     confidenceBaseline: row.confidence_baseline,
     confidenceVarianceImpact: row.confidence_variance_impact,
