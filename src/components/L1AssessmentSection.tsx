@@ -18,6 +18,7 @@ interface L1AssessmentSectionProps {
   scores: ScoreEntry[];
   evidence: Evidence[];
   consolidatedScores: ConsolidatedCriterionScore[];
+  scoreCommentThreshold: number;
   canEditScore: (score: ScoreEntry) => boolean;
   canEditComment: (score: ScoreEntry) => boolean;
   onScoreChange: (scoreId: string, nextValue: number | null) => void;
@@ -32,6 +33,7 @@ export function L1AssessmentSection({
   scores,
   evidence,
   consolidatedScores,
+  scoreCommentThreshold,
   canEditScore,
   canEditComment,
   onScoreChange,
@@ -91,6 +93,7 @@ export function L1AssessmentSection({
         vendors={vendors}
         scores={visibleScores}
         evidence={evidence}
+        scoreCommentThreshold={scoreCommentThreshold}
         canEditScore={canEditScore}
         canEditComment={canEditComment}
         onScoreChange={onScoreChange}

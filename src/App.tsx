@@ -373,6 +373,11 @@ function App() {
         });
 
         setPanelValidations((current) => [...current, createdValidation]);
+
+        if (input.decision === 'approved') {
+          const refreshedScores = await fetchScores(currentRfp.id);
+          setScores(refreshedScores);
+        }
       } catch (error) {
         setApiError(error instanceof Error ? error.message : 'Unable to persist panel validation.');
       }
@@ -637,6 +642,7 @@ function App() {
                 scores={scores}
                 evidence={evidence}
                 consolidatedScores={consolidatedL1}
+                scoreCommentThreshold={appConfig.scoreCommentThreshold}
                 canEditScore={(score) => canEditScore(activeUser, score, assessors)}
                 canEditComment={(score) => canEditComment(activeUser, score, assessors)}
                 onScoreChange={upsertScoreValue}
@@ -654,6 +660,7 @@ function App() {
                 vendors={vendors}
                 scores={ownerScores}
                 evidence={evidence}
+                scoreCommentThreshold={appConfig.scoreCommentThreshold}
                 canEditScore={(score) => canEditScore(activeUser, score, assessors)}
                 canEditComment={(score) => canEditComment(activeUser, score, assessors)}
                 onScoreChange={upsertScoreValue}
