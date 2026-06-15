@@ -1,5 +1,6 @@
 import cors from 'cors';
 import express from 'express';
+import { fileURLToPath } from 'url';
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -237,7 +238,7 @@ const requirePrimaryOwner = (req, res) => {
 };
 
 const resolveRequestedRecord = (req) => {
-  const requestedRfpId = String(req.query.rfpId || req.body.rfpId || '').trim();
+  const requestedRfpId = String(req.query.rfpId || req.body?.rfpId || '').trim();
 
   if (requestedRfpId) {
     return findRecordById(requestedRfpId);
@@ -837,7 +838,11 @@ app.post('/rfps/:rfpId/benchmarks', (req, res) => {
   res.status(201).json({ benchmarks: record.benchmarks });
 });
 
-app.listen(port, () => {
-  // eslint-disable-next-line no-console
-  console.log(`Mock API listening on http://localhost:${port}`);
-});
+export { app };
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  app.listen(port, () => {
+    // eslint-disable-next-line no-console
+    console.log(`Mock API listening on http://localhost:${port}`);
+  });
+}
