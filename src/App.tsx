@@ -23,7 +23,8 @@ import {
   vendors as seedVendors,
 } from './data/seed';
 import { canAddEvidence, canEditComment, canEditScore, canSubmitPanelValidation } from './lib/permissions';
-import { exportRankingCsv, exportWorkbook } from './lib/export';
+import { exportPdfSummary, exportRankingCsv, exportWorkbook } from './lib/export';
+import type { ExportMetadata } from './lib/export';
 import { deriveExecutiveSummary } from './lib/reporting';
 import {
   calculateVendorScores,
@@ -416,6 +417,12 @@ function App() {
   };
 
   const exportExcelReport = () => {
+    const metadata: ExportMetadata = {
+      rfpId: currentRfp.id,
+      rfpTitle: currentRfp.title,
+      exportedAt: new Date().toISOString(),
+      exportedBy: activeUser?.name ?? 'Unknown',
+    };
     exportWorkbook({
       fileName: `${currentRfp.title.replace(/\s+/g, '_')}_report.xlsx`,
       vendors,
@@ -425,14 +432,39 @@ function App() {
       evidence,
       vendorScores,
       executiveSummary,
+      metadata,
+      appConfig,
     });
   };
 
   const exportCsvRanking = () => {
+    const metadata: ExportMetadata = {
+      rfpId: currentRfp.id,
+      rfpTitle: currentRfp.title,
+      exportedAt: new Date().toISOString(),
+      exportedBy: activeUser?.name ?? 'Unknown',
+    };
     exportRankingCsv({
       fileName: `${currentRfp.title.replace(/\s+/g, '_')}_ranking.csv`,
       vendors,
       vendorScores,
+      metadata,
+    });
+  };
+
+  const exportPdfReport = () => {
+    const metadata: ExportMetadata = {
+      rfpId: currentRfp.id,
+      rfpTitle: currentRfp.title,
+      exportedAt: new Date().toISOString(),
+      exportedBy: activeUser?.name ?? 'Unknown',
+    };
+    exportPdfSummary({
+      fileName: `${currentRfp.title.replace(/\s+/g, '_')}_summary.pdf`,
+      vendors,
+      vendorScores,
+      executiveSummary,
+      metadata,
     });
   };
 
@@ -698,6 +730,7 @@ function App() {
                 historicalBenchmark={historicalBenchmark}
                 onExportExcel={exportExcelReport}
                 onExportCsv={exportCsvRanking}
+                onExportPdf={exportPdfReport}
               />
             </>
           )}
