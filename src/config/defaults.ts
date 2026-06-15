@@ -21,6 +21,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   confidenceVarianceImpact: 0.4,
   riskAdjustmentFloor: 0.7,
   riskAdjustmentScale: 0.3,
+  scoreCommentThreshold: 30,
 };
 
 export const SCORE_MIN = 0;

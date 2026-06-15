@@ -76,6 +76,7 @@ export interface ScoreEntry {
   ownerId: string;
   value: number | null;
   comment: string;
+  locked?: boolean;
   updatedAt: string;
 }
 
@@ -179,4 +180,5 @@ export interface AppConfig {
   confidenceVarianceImpact: number;
   riskAdjustmentFloor: number;
   riskAdjustmentScale: number;
+  scoreCommentThreshold: number;
 }

@@ -108,6 +108,7 @@ const appConfig = {
   confidenceVarianceImpact: 0.4,
   riskAdjustmentFloor: 0.7,
   riskAdjustmentScale: 0.3,
+  scoreCommentThreshold: 30,
 };
 
 const createScoresForRecord = (rfpId, vendors, criteria) => {
@@ -124,6 +125,7 @@ const createScoresForRecord = (rfpId, vendors, criteria) => {
           ownerId: assessor.id,
           value: null,
           comment: '',
+          locked: false,
           updatedAt: nowIso(),
         })),
     ),
@@ -141,6 +143,7 @@ const createScoresForRecord = (rfpId, vendors, criteria) => {
         ownerId: users.owner.id,
         value: null,
         comment: '',
+        locked: false,
         updatedAt: nowIso(),
       })),
   );
@@ -585,6 +588,7 @@ app.put('/config', (req, res) => {
   );
   appConfig.riskAdjustmentFloor = Number(req.body.riskAdjustmentFloor ?? appConfig.riskAdjustmentFloor);
   appConfig.riskAdjustmentScale = Number(req.body.riskAdjustmentScale ?? appConfig.riskAdjustmentScale);
+  appConfig.scoreCommentThreshold = Number(req.body.scoreCommentThreshold ?? appConfig.scoreCommentThreshold);
 
   res.json({ config: appConfig });
 });
@@ -617,8 +621,33 @@ app.put('/scores/:scoreId', (req, res) => {
     return;
   }
 
+  if (score.locked) {
+    res.status(409).json({ message: 'Score is locked and cannot be modified after panel approval.' });
+    return;
+  }
+
   const nextValue = Object.prototype.hasOwnProperty.call(req.body, 'value') ? req.body.value : score.value;
   const nextComment = typeof req.body.comment === 'string' ? req.body.comment : score.comment;
+
+  if (nextValue !== null && nextValue !== undefined) {
+    const numericValue = Number(nextValue);
+    if (!Number.isFinite(numericValue) || numericValue < 0 || numericValue > 100) {
+      res.status(400).json({ message: 'Score value must be between 0 and 100.' });
+      return;
+    }
+  }
+
+  if (
+    nextValue !== null &&
+    nextValue !== undefined &&
+    Number(nextValue) < appConfig.scoreCommentThreshold &&
+    !nextComment.trim()
+  ) {
+    res
+      .status(400)
+      .json({ message: `A comment is required when the score is below ${appConfig.scoreCommentThreshold}.` });
+    return;
+  }
 
   const auditEvent = {
     id: newId('audit'),
@@ -762,6 +791,15 @@ app.post('/panel-validations', (req, res) => {
   };
 
   record.panelValidations.push(validation);
+
+  if (decision === 'approved') {
+    for (const score of record.scores) {
+      if (score.vendorId === vendorId) {
+        score.locked = true;
+      }
+    }
+  }
+
   res.status(201).json({ validation });
 });
 

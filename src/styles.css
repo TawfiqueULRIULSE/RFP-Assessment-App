@@ -325,6 +325,32 @@ button {
   color: #9f1239;
 }
 
+.input-error {
+  border-color: #ef4444 !important;
+}
+
+.validation-error {
+  font-size: 0.78rem;
+  color: #b91c1c;
+}
+
+.validation-warning {
+  font-size: 0.78rem;
+  color: #92400e;
+  background: #fef3c7;
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+}
+
+.locked-badge {
+  font-size: 0.78rem;
+  color: #4b5563;
+  background: #e5e7eb;
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+  cursor: default;
+}
+
 @media (max-width: 760px) {
   .hero-meta {
     flex-direction: column;
