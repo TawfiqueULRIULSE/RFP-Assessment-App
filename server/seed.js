@@ -15,7 +15,7 @@ const OWNER_ID = 'owner-1';
 const SEED_RFP_ID = 'rfp-2026-network-modernization';
 
 const nowIso = () => new Date().toISOString();
-const newId = (prefix) => `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+const newId = (prefix) => `${prefix}-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
 
 const seedVendors = [
   { id: 'vendor-northstar', name: 'Northstar Systems' },

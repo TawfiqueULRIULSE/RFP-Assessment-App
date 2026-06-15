@@ -25,7 +25,7 @@ app.use(cors());
 app.use(express.json());
 
 const nowIso = () => new Date().toISOString();
-const newId = (prefix) => `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+const newId = (prefix) => `${prefix}-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
 
 const users = {
   owner: { id: 'owner-1', name: 'Avery Khan', role: 'Primary Owner' },

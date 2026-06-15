@@ -51,7 +51,7 @@ PostgreSQL client (e.g. [`pg`](https://node-postgres.com/)) and update
 `server/db.js` to connect via the `DATABASE_URL` environment variable:
 
 ```
-DATABASE_URL=******host:5432/dbname
+DATABASE_URL=postgresql://<user>:<password>@<host>:5432/<dbname>
 ```
 
 ## Good next steps for GitHub Copilot
