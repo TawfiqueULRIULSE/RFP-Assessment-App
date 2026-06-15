@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { evidenceDownloadUrl } from '../services/evidenceService';
+import { buildAuthHeaders } from '../services/api';
 import type { Criterion, Evidence, User, Vendor } from '../types/domain';
 
 interface EvidencePanelProps {
@@ -12,17 +14,115 @@ interface EvidencePanelProps {
     criterionId: string;
     title: string;
     url: string;
-    attachmentName: string;
     addedBy: string;
-  }) => void;
+    file?: File;
+    onProgress?: (percent: number) => void;
+  }) => Promise<void>;
+  onDeleteEvidence?: (evidenceId: string) => Promise<void>;
 }
 
-export function EvidencePanel({ vendors, criteria, evidence, currentUser, canAdd, onAddEvidence }: EvidencePanelProps) {
+export function EvidencePanel({ vendors, criteria, evidence, currentUser, canAdd, onAddEvidence, onDeleteEvidence }: EvidencePanelProps) {
   const [vendorId, setVendorId] = useState<string>(vendors[0]?.id ?? '');
   const [criterionId, setCriterionId] = useState<string>(criteria[0]?.id ?? '');
   const [title, setTitle] = useState('');
   const [url, setUrl] = useState('');
-  const [attachmentName, setAttachmentName] = useState('');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.png', '.jpg', '.jpeg'];
+  const MAX_FILE_SIZE_MB = 10;
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    if (!file) {
+      setSelectedFile(null);
+      return;
+    }
+
+    const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
+      setFormError(`Invalid file type. Allowed: ${ALLOWED_EXTENSIONS.join(', ')}`);
+      setSelectedFile(null);
+      event.target.value = '';
+      return;
+    }
+
+    if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+      setFormError(`File exceeds the ${MAX_FILE_SIZE_MB} MB size limit.`);
+      setSelectedFile(null);
+      event.target.value = '';
+      return;
+    }
+
+    setFormError(null);
+    setSelectedFile(file);
+  };
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!canAdd || isSubmitting) return;
+    if (!title.trim() || !url.trim()) return;
+
+    setFormError(null);
+    setIsSubmitting(true);
+    setUploadProgress(null);
+
+    try {
+      await onAddEvidence({
+        vendorId,
+        criterionId,
+        title: title.trim(),
+        url: url.trim(),
+        addedBy: currentUser.name,
+        file: selectedFile ?? undefined,
+        onProgress: selectedFile ? setUploadProgress : undefined,
+      });
+
+      setTitle('');
+      setUrl('');
+      setSelectedFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Failed to add evidence.');
+    } finally {
+      setIsSubmitting(false);
+      setUploadProgress(null);
+    }
+  };
+
+  const handleDelete = async (evidenceId: string) => {
+    if (!onDeleteEvidence) return;
+    try {
+      await onDeleteEvidence(evidenceId);
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Failed to delete evidence.');
+    }
+  };
+
+  const handleDownload = async (item: Evidence) => {
+    try {
+      const response = await fetch(evidenceDownloadUrl(item.id), {
+        headers: buildAuthHeaders(),
+      });
+      if (!response.ok) {
+        throw new Error(`Download failed (${response.status})`);
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = item.attachmentName || 'attachment';
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Download failed.');
+    }
+  };
 
   return (
     <section className="panel stack-md">
@@ -30,32 +130,7 @@ export function EvidencePanel({ vendors, criteria, evidence, currentUser, canAdd
         <h3>Evidence Layer</h3>
       </header>
 
-      <form
-        className="evidence-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!canAdd) {
-            return;
-          }
-
-          if (!title.trim() || !url.trim()) {
-            return;
-          }
-
-          onAddEvidence({
-            vendorId,
-            criterionId,
-            title: title.trim(),
-            url: url.trim(),
-            attachmentName: attachmentName.trim(),
-            addedBy: currentUser.name,
-          });
-
-          setTitle('');
-          setUrl('');
-          setAttachmentName('');
-        }}
-      >
+      <form className="evidence-form" onSubmit={(e) => { void handleSubmit(e); }}>
         <label>
           Vendor
           <select value={vendorId} onChange={(event) => setVendorId(event.target.value)} disabled={!canAdd}>
@@ -100,16 +175,32 @@ export function EvidencePanel({ vendors, criteria, evidence, currentUser, canAdd
         </label>
 
         <label>
-          Attachment name (optional)
+          Attachment (optional — PDF, DOCX, PNG, JPG, max 10 MB)
           <input
-            value={attachmentName}
-            onChange={(event) => setAttachmentName(event.target.value)}
-            placeholder="security-test-report.pdf"
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.docx,.png,.jpg,.jpeg"
+            onChange={handleFileChange}
             disabled={!canAdd}
           />
         </label>
 
-        <button type="submit" disabled={!canAdd}>Attach evidence</button>
+        {selectedFile && (
+          <p className="muted">Selected: {selectedFile.name} ({(selectedFile.size / 1024).toFixed(1)} KB)</p>
+        )}
+
+        {uploadProgress !== null && (
+          <div className="upload-progress">
+            <div className="upload-progress-bar" style={{ width: `${uploadProgress}%` }} />
+            <span>{uploadProgress}%</span>
+          </div>
+        )}
+
+        {formError && <p className="error-message">{formError}</p>}
+
+        <button type="submit" disabled={!canAdd || isSubmitting}>
+          {isSubmitting ? 'Uploading…' : 'Attach evidence'}
+        </button>
       </form>
 
       {!canAdd && <p className="muted">Only Primary Owner can add evidence in this phase.</p>}
@@ -124,6 +215,7 @@ export function EvidencePanel({ vendors, criteria, evidence, currentUser, canAdd
               <th>Attachment</th>
               <th>Added By</th>
               <th>Added At</th>
+              {canAdd && onDeleteEvidence && <th>Actions</th>}
             </tr>
           </thead>
           <tbody>
@@ -136,14 +228,37 @@ export function EvidencePanel({ vendors, criteria, evidence, currentUser, canAdd
                     {item.title}
                   </a>
                 </td>
-                <td>{item.attachmentName || '-'}</td>
+                <td>
+                  {item.hasAttachment ? (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => { void handleDownload(item); }}
+                    >
+                      {item.attachmentName || 'Download'}
+                    </button>
+                  ) : (
+                    item.attachmentName || '-'
+                  )}
+                </td>
                 <td>{item.addedBy}</td>
                 <td>{new Date(item.addedAt).toLocaleString()}</td>
+                {canAdd && onDeleteEvidence && (
+                  <td>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => { void handleDelete(item.id); }}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
             {evidence.length === 0 && (
               <tr>
-                <td colSpan={6}>No evidence attached yet.</td>
+                <td colSpan={canAdd && onDeleteEvidence ? 7 : 6}>No evidence attached yet.</td>
               </tr>
             )}
           </tbody>

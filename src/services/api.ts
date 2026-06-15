@@ -1,6 +1,6 @@
 import type { AppUser } from '../types/domain';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
 
 let activeActor: AppUser | null = null;
 let authToken: string | null = null;
@@ -32,6 +32,21 @@ const buildHeaders = (): HeadersInit => {
 
   if (authToken) {
     headers.Authorization = `Bearer ${authToken}`;
+  }
+
+  return headers;
+};
+
+export const buildAuthHeaders = (): Record<string, string> => {
+  const headers: Record<string, string> = {};
+
+  if (activeActor) {
+    headers['x-user-id'] = activeActor.id;
+    headers['x-role'] = activeActor.role;
+  }
+
+  if (authToken) {
+    headers.Authorization = 'Bearer ' + authToken;
   }
 
   return headers;
