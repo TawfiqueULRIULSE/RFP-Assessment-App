@@ -1,11 +1,55 @@
 import cors from 'cors';
 import express from 'express';
+import fs from 'fs';
+import multer from 'multer';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
 
 app.use(cors());
 app.use(express.json());
+
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
+const ALLOWED_MIME_TYPES = new Set([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'image/png',
+  'image/jpeg',
+]);
+
+const ALLOWED_EXTENSIONS = new Set(['.pdf', '.docx', '.png', '.jpg', '.jpeg']);
+
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
+
+const evidenceStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
+  filename: (req, file, cb) => {
+    const evidenceId = req.params.evidenceId || 'unknown';
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${evidenceId}${ext}`);
+  },
+});
+
+const evidenceUpload = multer({
+  storage: evidenceStorage,
+  limits: { fileSize: MAX_FILE_SIZE_BYTES },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!ALLOWED_MIME_TYPES.has(file.mimetype) || !ALLOWED_EXTENSIONS.has(ext)) {
+      return cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', file.fieldname));
+    }
+    cb(null, true);
+  },
+});
 
 const nowIso = () => new Date().toISOString();
 const newId = (prefix) => `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
@@ -765,13 +809,36 @@ app.post('/panel-validations', (req, res) => {
   res.status(201).json({ validation });
 });
 
+const serializeEvidence = (item) => ({
+  id: item.id,
+  rfpId: item.rfpId,
+  vendorId: item.vendorId,
+  criterionId: item.criterionId,
+  title: item.title,
+  url: item.url,
+  attachmentName: item.attachmentName,
+  hasAttachment: Boolean(item.attachmentPath),
+  addedBy: item.addedBy,
+  addedAt: item.addedAt,
+});
+
+const findEvidenceById = (evidenceId) => {
+  for (const record of records.values()) {
+    const item = record.evidence.find((e) => e.id === evidenceId);
+    if (item) {
+      return { record, item };
+    }
+  }
+  return null;
+};
+
 app.get('/evidence', (req, res) => {
   const record = resolveRequestedRecord(req);
   if (!requireRecord(record, res)) {
     return;
   }
 
-  res.json({ evidence: record.evidence });
+  res.json({ evidence: record.evidence.map(serializeEvidence) });
 });
 
 app.post('/evidence', (req, res) => {
@@ -798,12 +865,119 @@ app.post('/evidence', (req, res) => {
     title: String(req.body.title || ''),
     url: String(req.body.url || ''),
     attachmentName: String(req.body.attachmentName || ''),
+    attachmentPath: null,
     addedBy: String(req.body.addedBy || actor.id),
     addedAt: nowIso(),
   };
 
   record.evidence.push(item);
-  res.status(201).json({ evidence: item });
+  res.status(201).json({ evidence: serializeEvidence(item) });
+});
+
+app.post('/evidence/:evidenceId/upload', (req, res) => {
+  const actor = requireAuth(req, res);
+  if (!actor) {
+    return;
+  }
+
+  if (actor.role !== 'Primary Owner') {
+    res.status(403).json({ message: 'Only Primary Owner can upload evidence files.' });
+    return;
+  }
+
+  const found = findEvidenceById(req.params.evidenceId);
+  if (!found) {
+    res.status(404).json({ message: 'Evidence item not found.' });
+    return;
+  }
+
+  evidenceUpload.single('file')(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        res.status(400).json({ message: 'File exceeds the 10 MB size limit.' });
+      } else {
+        res.status(400).json({ message: 'Invalid file type. Allowed types: PDF, DOCX, PNG, JPG.' });
+      }
+      return;
+    }
+
+    if (err) {
+      res.status(500).json({ message: 'File upload failed.' });
+      return;
+    }
+
+    if (!req.file) {
+      res.status(400).json({ message: 'No file provided.' });
+      return;
+    }
+
+    // Remove previous attachment file if it exists
+    if (found.item.attachmentPath && fs.existsSync(found.item.attachmentPath)) {
+      try {
+        fs.unlinkSync(found.item.attachmentPath);
+      } catch {
+        // best-effort cleanup
+      }
+    }
+
+    found.item.attachmentPath = req.file.path;
+    found.item.attachmentName = req.file.originalname;
+
+    res.json({ evidence: serializeEvidence(found.item) });
+  });
+});
+
+app.get('/evidence/:evidenceId/download', (req, res) => {
+  const actor = requireAuth(req, res);
+  if (!actor) {
+    return;
+  }
+
+  const found = findEvidenceById(req.params.evidenceId);
+  if (!found) {
+    res.status(404).json({ message: 'Evidence item not found.' });
+    return;
+  }
+
+  const { item } = found;
+
+  if (!item.attachmentPath || !fs.existsSync(item.attachmentPath)) {
+    res.status(404).json({ message: 'No attachment found for this evidence item.' });
+    return;
+  }
+
+  res.download(item.attachmentPath, item.attachmentName || path.basename(item.attachmentPath));
+});
+
+app.delete('/evidence/:evidenceId', (req, res) => {
+  const actor = requireAuth(req, res);
+  if (!actor) {
+    return;
+  }
+
+  if (actor.role !== 'Primary Owner') {
+    res.status(403).json({ message: 'Only Primary Owner can delete evidence.' });
+    return;
+  }
+
+  const found = findEvidenceById(req.params.evidenceId);
+  if (!found) {
+    res.status(404).json({ message: 'Evidence item not found.' });
+    return;
+  }
+
+  const { record, item } = found;
+
+  if (item.attachmentPath && fs.existsSync(item.attachmentPath)) {
+    try {
+      fs.unlinkSync(item.attachmentPath);
+    } catch {
+      // best-effort cleanup
+    }
+  }
+
+  record.evidence = record.evidence.filter((e) => e.id !== item.id);
+  res.status(204).end();
 });
 
 app.get('/rfps/:rfpId/benchmarks', (req, res) => {

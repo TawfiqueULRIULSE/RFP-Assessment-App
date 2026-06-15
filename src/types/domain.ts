@@ -87,6 +87,7 @@ export interface Evidence {
   title: string;
   url: string;
   attachmentName: string;
+  hasAttachment?: boolean;
   addedBy: string;
   addedAt: string;
 }

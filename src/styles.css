@@ -335,3 +335,28 @@ button {
     min-width: 180px;
   }
 }
+
+.upload-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 1.25rem;
+  background: #e5e7eb;
+  border-radius: 9999px;
+  overflow: hidden;
+  font-size: 0.75rem;
+  padding: 0 0.5rem;
+}
+
+.upload-progress-bar {
+  height: 100%;
+  background: #2563eb;
+  border-radius: 9999px;
+  transition: width 0.2s ease;
+}
+
+.error-message {
+  color: #9f1239;
+  font-size: 0.875rem;
+  margin-top: 0.25rem;
+}

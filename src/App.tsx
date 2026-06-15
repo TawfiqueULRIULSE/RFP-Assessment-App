@@ -35,7 +35,7 @@ import { fetchBenchmarks, saveBenchmarks } from './services/benchmarkService';
 import { fetchScoreAuditEvents } from './services/auditService';
 import { fetchComments } from './services/commentService';
 import { fetchAppConfig, updateAppConfig } from './services/configService';
-import { createEvidence, fetchEvidence } from './services/evidenceService';
+import { createEvidence, deleteEvidence, fetchEvidence, uploadEvidenceFile } from './services/evidenceService';
 import { fetchAuthUsers, loginAsUser, logoutSession, restoreSession } from './services/authService';
 import { createPanelValidation, fetchPanelValidations } from './services/panelValidationService';
 import {
@@ -315,13 +315,14 @@ function App() {
     })();
   };
 
-  const addEvidence = (input: {
+  const addEvidence = async (input: {
     vendorId: string;
     criterionId: string;
     title: string;
     url: string;
-    attachmentName: string;
     addedBy: string;
+    file?: File;
+    onProgress?: (percent: number) => void;
   }) => {
     if (!activeUser) {
       return;
@@ -331,23 +332,26 @@ function App() {
       return;
     }
 
-    void (async () => {
-      try {
-        const created = await createEvidence({
-          rfpId: currentRfp.id,
-          vendorId: input.vendorId,
-          criterionId: input.criterionId,
-          title: input.title,
-          url: input.url,
-          attachmentName: input.attachmentName,
-          addedBy: input.addedBy,
-        });
+    const created = await createEvidence({
+      rfpId: currentRfp.id,
+      vendorId: input.vendorId,
+      criterionId: input.criterionId,
+      title: input.title,
+      url: input.url,
+      addedBy: input.addedBy,
+    });
 
-        setEvidence((current) => [...current, created]);
-      } catch (error) {
-        setApiError(error instanceof Error ? error.message : 'Unable to persist evidence item.');
-      }
-    })();
+    if (input.file) {
+      const updated = await uploadEvidenceFile(created.id, input.file, input.onProgress);
+      setEvidence((current) => [...current, updated]);
+    } else {
+      setEvidence((current) => [...current, created]);
+    }
+  };
+
+  const removeEvidence = async (evidenceId: string) => {
+    await deleteEvidence(evidenceId);
+    setEvidence((current) => current.filter((item) => item.id !== evidenceId));
   };
 
   const submitPanelValidation = (input: {
@@ -678,6 +682,7 @@ function App() {
                 currentUser={activeUser}
                 canAdd={canAddEvidence(activeUser)}
                 onAddEvidence={addEvidence}
+                onDeleteEvidence={removeEvidence}
               />
             </>
           )}
