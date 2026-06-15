@@ -2,11 +2,11 @@ import type { AppUser } from '../types/domain';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
 
-let activeActor: AppUser | null = null;
 let authToken: string | null = null;
 
-export const setApiActor = (actor: AppUser | null) => {
-  activeActor = actor;
+/** @deprecated Identity is now established solely via the bearer token. */
+export const setApiActor = (_actor: AppUser | null) => {
+  // No-op: x-user-id / x-role headers are no longer sent.
 };
 
 export const setApiAuthToken = (token: string | null) => {
@@ -25,13 +25,8 @@ const buildHeaders = (): HeadersInit => {
     'Content-Type': 'application/json',
   };
 
-  if (activeActor) {
-    headers['x-user-id'] = activeActor.id;
-    headers['x-role'] = activeActor.role;
-  }
-
   if (authToken) {
-    headers.Authorization = `Bearer ${authToken}`;
+        headers.Authorization = `Bearer ${authToken}`;
   }
 
   return headers;
