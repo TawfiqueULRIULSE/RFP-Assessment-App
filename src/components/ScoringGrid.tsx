@@ -118,6 +118,10 @@ export function ScoringGrid({
 
                             const next = Number(raw);
                             if (!Number.isFinite(next)) {
+                              setScoreErrors((current) => ({
+                                ...current,
+                                [score.id]: 'Score must be a valid number.',
+                              }));
                               return;
                             }
 

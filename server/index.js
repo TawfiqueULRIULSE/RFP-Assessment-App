@@ -629,10 +629,10 @@ app.put('/scores/:scoreId', (req, res) => {
   const nextValue = Object.prototype.hasOwnProperty.call(req.body, 'value') ? req.body.value : score.value;
   const nextComment = typeof req.body.comment === 'string' ? req.body.comment : score.comment;
 
-  if (nextValue !== null && nextValue !== undefined) {
+    if (nextValue !== null && nextValue !== undefined) {
     const numericValue = Number(nextValue);
     if (!Number.isFinite(numericValue) || numericValue < 0 || numericValue > 100) {
-      res.status(400).json({ message: 'Score value must be between 0 and 100.' });
+      res.status(400).json({ message: 'Score value must be a valid number between 0 and 100.' });
       return;
     }
   }
