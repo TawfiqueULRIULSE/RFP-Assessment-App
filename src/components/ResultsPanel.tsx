@@ -13,6 +13,7 @@ interface ResultsPanelProps {
   historicalBenchmark: HistoricalBenchmarkRecord[];
   onExportExcel: () => void;
   onExportCsv: () => void;
+  onExportPdf: () => void;
 }
 
 export function ResultsPanel({
@@ -23,6 +24,7 @@ export function ResultsPanel({
   historicalBenchmark,
   onExportExcel,
   onExportCsv,
+  onExportPdf,
 }: ResultsPanelProps) {
   const ranked = [...vendorScores].sort((a, b) => b.riskAdjustedScore - a.riskAdjustedScore);
 
@@ -34,6 +36,7 @@ export function ResultsPanel({
           <div className="action-group">
             <button type="button" onClick={onExportExcel}>Export Excel</button>
             <button type="button" className="secondary-button" onClick={onExportCsv}>Export CSV</button>
+            <button type="button" className="secondary-button" onClick={onExportPdf}>Export PDF</button>
             <div className={closeScoreFlag ? 'badge badge-warning' : 'badge'}>
               {closeScoreFlag ? 'Close score discussion required' : 'Score spread is clear'}
             </div>
