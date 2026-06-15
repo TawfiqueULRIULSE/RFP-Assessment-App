@@ -63,7 +63,7 @@ export interface RfpIngestJob {
   fileType: string;
   createdAt: string;
   updatedAt: string;
-  errorMessage?: string;
+  failureReason?: string | null;
   generatedL1Draft: RfpIngestDraftCriterion[];
 }
 

@@ -20,10 +20,13 @@ class ApiError extends Error {
   }
 }
 
-const buildHeaders = (): HeadersInit => {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
+const buildHeaders = (body?: BodyInit | null): HeadersInit => {
+  const headers: Record<string, string> = {};
+
+  // Do not set Content-Type for FormData — the browser must set it with the boundary.
+  if (!(body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json';
+  }
 
   if (activeActor) {
     headers['x-user-id'] = activeActor.id;
@@ -41,7 +44,7 @@ export const apiRequest = async <T>(path: string, init?: RequestInit): Promise<T
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
-      ...buildHeaders(),
+      ...buildHeaders(init?.body),
       ...(init?.headers ?? {}),
     },
   });

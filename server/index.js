@@ -1,11 +1,56 @@
 import cors from 'cors';
 import express from 'express';
+import fs from 'node:fs';
+import { createRequire } from 'node:module';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import multer from 'multer';
+import mammoth from 'mammoth';
+
+const require = createRequire(import.meta.url);
+const pdfParse = require('pdf-parse');
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
 
 app.use(cors());
 app.use(express.json());
+
+// ─── File upload setup ────────────────────────────────────────────────────────
+
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const STATE_FILE = path.join(__dirname, 'data', 'state.json');
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
+
+const ALLOWED_MIME_TYPES = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain',
+]);
+
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
+if (!fs.existsSync(path.dirname(STATE_FILE))) {
+  fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+}
+
+const upload = multer({
+  dest: UPLOADS_DIR,
+  limits: { fileSize: MAX_FILE_SIZE_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_MIME_TYPES.has(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(Object.assign(new Error('Only PDF, DOCX, and TXT files are accepted.'), { code: 'UNSUPPORTED_FILE_TYPE' }));
+    }
+  },
+});
 
 const nowIso = () => new Date().toISOString();
 const newId = (prefix) => `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
@@ -97,6 +142,41 @@ const defaultL2L3Criteria = [
 
 const records = new Map();
 const sessions = new Map();
+
+// ─── State persistence ────────────────────────────────────────────────────────
+
+const saveState = () => {
+  try {
+    const serialised = JSON.stringify(
+      { records: Array.from(records.entries()) },
+      null,
+      2,
+    );
+    fs.writeFileSync(STATE_FILE, serialised, 'utf8');
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[state] Failed to save state:', err.message);
+  }
+};
+
+const loadState = () => {
+  try {
+    if (!fs.existsSync(STATE_FILE)) {
+      return false;
+    }
+    const raw = fs.readFileSync(STATE_FILE, 'utf8');
+    const { records: entries } = JSON.parse(raw);
+    records.clear();
+    for (const [id, record] of entries) {
+      records.set(id, record);
+    }
+    return true;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[state] Failed to load state:', err.message);
+    return false;
+  }
+};
 const appConfig = {
   layerWeights: {
     L1: 0.55,
@@ -197,6 +277,9 @@ const seedRecord = createRecordStore({
 });
 records.set(seedRecord.rfp.id, seedRecord);
 
+// Restore persisted state if available (overwrites seed defaults)
+loadState();
+
 const buildAppUsers = () => [
   users.owner,
   ...users.assessors,
@@ -267,30 +350,193 @@ const ensureL2L3Criteria = (criteria) => {
   return next;
 };
 
-const buildIngestDraft = (fileName) => {
-  const cleaned = fileName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  const suffix = cleaned || 'rfp';
+// ─── File parsing and L1 draft extraction ────────────────────────────────────
 
-  return [
-    {
-      id: `l1-${suffix}-solution-architecture`,
+/** Multer generates filenames as random hex strings; anything else is invalid. */
+const SAFE_UPLOAD_FILENAME_RE = /^[0-9a-f]+$/i;
+
+/**
+ * Build the absolute path for a stored upload filename.
+ * Rejects filenames that are not valid multer-generated hex names.
+ */
+const resolveUploadPath = (filename) => {
+  if (!SAFE_UPLOAD_FILENAME_RE.test(filename)) {
+    throw new Error('Invalid upload filename');
+  }
+  return path.join(UPLOADS_DIR, filename);
+};
+
+/**
+ * Extract plain text from an uploaded file based on its MIME type.
+ * @param {string} filename - The multer-generated filename (hex, no path separators).
+ */
+const extractTextFromFile = async (filename, mimeType) => {
+  // Build path from server-controlled UPLOADS_DIR + validated filename only.
+  const filePath = resolveUploadPath(filename);
+
+  if (mimeType === 'text/plain') {
+    return fs.readFileSync(filePath, 'utf8');
+  }
+
+  if (
+    mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    mimeType === 'application/msword'
+  ) {
+    const result = await mammoth.extractRawText({ path: filePath });
+    return result.value;
+  }
+
+  if (mimeType === 'application/pdf') {
+    const buffer = fs.readFileSync(filePath);
+    const data = await pdfParse(buffer);
+    return data.text;
+  }
+
+  throw new Error(`Unsupported file type: ${mimeType}`);
+};
+
+const L1_CATEGORIES = [
+  {
+    id: 'technical-architecture',
+    label: 'Technical Architecture',
+    keywords: /\b(technical|architecture|design|scalability|integration|system|platform|infrastructure|technology|solution|software|hardware)\b/i,
+    defaultDesc: 'Technical solution quality, architecture depth, and integration capabilities.',
+  },
+  {
+    id: 'security-compliance',
+    label: 'Security and Compliance',
+    keywords: /\b(security|compliance|regulation|privacy|audit|certification|encryption|vulnerability|risk)\b/i,
+    defaultDesc: 'Security controls, compliance coverage, and regulatory requirements.',
+  },
+  {
+    id: 'implementation-delivery',
+    label: 'Implementation and Delivery',
+    keywords: /\b(delivery|implementation|timeline|schedule|milestone|staffing|support|deployment|transition)\b/i,
+    defaultDesc: 'Implementation feasibility, staffing model, and delivery timeline.',
+  },
+  {
+    id: 'vendor-experience',
+    label: 'Vendor Experience and Capability',
+    keywords: /\b(experience|capability|reference|portfolio|expertise|qualification|certification|similar)\b/i,
+    defaultDesc: 'Vendor qualifications, past performance, and domain expertise.',
+  },
+  {
+    id: 'cost-commercial',
+    label: 'Cost and Commercial Terms',
+    keywords: /\b(cost|price|commercial|contract|financial|budget|fee|payment|pricing)\b/i,
+    defaultDesc: 'Pricing structure, commercial flexibility, and total cost of ownership.',
+  },
+];
+
+/**
+ * Analyse extracted text and return candidate L1 draft criteria.
+ * Uses keyword matching against common RFP evaluation categories.
+ */
+const MIN_LINE_LENGTH = 20;  // skip fragment lines too short to be meaningful
+const MAX_LINE_LENGTH = 400; // skip overly long paragraphs unlikely to be criteria
+const MAX_DRAFT_CRITERIA = 5; // maximum L1 criteria to generate from a document
+const MIN_DRAFT_CRITERIA = 3; // minimum L1 criteria to ensure a usable draft
+
+const extractL1DraftFromText = (text) => {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > MIN_LINE_LENGTH && line.length < MAX_LINE_LENGTH);
+
+  const requirementLines = lines.filter((line) =>
+    /\b(shall|must|required?|criteria|evaluation|technical|security|compliance|delivery|implementation|architecture|performance|functional|support|experience|capability)\b/i.test(
+      line,
+    ),
+  );
+
+  const draft = [];
+  const usedIds = new Set();
+
+  for (const category of L1_CATEGORIES) {
+    if (draft.length >= MAX_DRAFT_CRITERIA) {
+      break;
+    }
+
+    const matches = requirementLines.filter((line) => category.keywords.test(line));
+    const description =
+      matches.length > 0
+        ? matches[0].length > 200
+          ? `${matches[0].substring(0, 197)}…`
+          : matches[0]
+        : category.defaultDesc;
+
+    draft.push({
+      id: `l1-${category.id}`,
       layer: 'L1',
-      label: 'Solution Architecture',
-      description: `Generated from ${fileName}: architecture depth, extensibility, and technical fit.`,
-    },
-    {
-      id: `l1-${suffix}-security-and-compliance`,
-      layer: 'L1',
-      label: 'Security and Compliance',
-      description: `Generated from ${fileName}: controls, compliance coverage, and risk handling.`,
-    },
-    {
-      id: `l1-${suffix}-implementation-and-delivery`,
-      layer: 'L1',
-      label: 'Implementation and Delivery',
-      description: `Generated from ${fileName}: implementation feasibility, staffing model, and timeline confidence.`,
-    },
-  ];
+      label: category.label,
+      description,
+    });
+
+    usedIds.add(category.id);
+  }
+
+  // Ensure at least MIN_DRAFT_CRITERIA criteria using defaults for any missing categories
+  for (const category of L1_CATEGORIES) {
+    if (draft.length >= MIN_DRAFT_CRITERIA) {
+      break;
+    }
+
+    if (!usedIds.has(category.id)) {
+      draft.push({
+        id: `l1-${category.id}`,
+        layer: 'L1',
+        label: category.label,
+        description: category.defaultDesc,
+      });
+    }
+  }
+
+  return draft;
+};
+
+/**
+ * Run the full ingest pipeline for a job:
+ * queued → processing → ready | failed
+ * @param {string} filename - The multer-generated upload filename (hex, no directory).
+ */
+const runIngestPipeline = async (rfpId, jobId, filename, mimeType) => {
+  const liveRecord = findRecordById(rfpId);
+  const liveJob = liveRecord?.ingestJobs.find((entry) => entry.id === jobId);
+
+  if (!liveRecord || !liveJob) {
+    return;
+  }
+
+  // Transition to processing
+  liveJob.status = 'processing';
+  liveJob.updatedAt = nowIso();
+  saveState();
+
+  try {
+    const text = await extractTextFromFile(filename, mimeType);
+    const draft = extractL1DraftFromText(text);
+
+    liveJob.status = 'ready';
+    liveJob.generatedL1Draft = draft;
+    liveJob.updatedAt = nowIso();
+    liveRecord.rfp.intakeStatus = 'ready';
+    liveRecord.rfp.updatedAt = nowIso();
+  } catch (err) {
+    liveJob.status = 'failed';
+    liveJob.failureReason = err instanceof Error ? err.message : 'File parsing failed.';
+    liveJob.updatedAt = nowIso();
+    liveRecord.rfp.intakeStatus = 'failed';
+    liveRecord.rfp.updatedAt = nowIso();
+  } finally {
+    // Clean up the uploaded file using a server-controlled path
+    try {
+      fs.unlinkSync(resolveUploadPath(filename));
+    } catch (cleanupErr) {
+      // eslint-disable-next-line no-console
+      console.error('[ingest] Failed to clean up uploaded file:', cleanupErr.message);
+    }
+    saveState();
+  }
 };
 
 const resolveActor = (req) => {
@@ -402,70 +648,75 @@ app.get('/rfp-records/:rfpId', (req, res) => {
   res.json({ record: record.rfp });
 });
 
-app.post('/rfp-records/:rfpId/ingest-jobs', (req, res) => {
-  const actor = requirePrimaryOwner(req, res);
-  if (!actor) {
-    return;
-  }
-
-  const record = findRecordById(req.params.rfpId);
-  if (!requireRecord(record, res)) {
-    return;
-  }
-
-  const fileName = String(req.body.fileName || '').trim();
-  const fileType = String(req.body.fileType || '').trim();
-
-  if (!fileName || !fileType) {
-    res.status(400).json({ message: 'fileName and fileType are required.' });
-    return;
-  }
-
-  const createdAt = nowIso();
-  const job = {
-    id: newId('ingest-job'),
-    rfpId: record.rfp.id,
-    status: 'queued',
-    fileName,
-    fileType,
-    createdAt,
-    updatedAt: createdAt,
-    generatedL1Draft: [],
-  };
-
-  record.ingestJobs.push(job);
-  record.rfp.intakeMethod = 'ingest';
-  record.rfp.intakeStatus = 'ingesting';
-  record.rfp.updatedAt = nowIso();
-
-  setTimeout(() => {
-    const liveRecord = findRecordById(record.rfp.id);
-    const liveJob = liveRecord?.ingestJobs.find((entry) => entry.id === job.id);
-
-    if (!liveRecord || !liveJob) {
-      return;
-    }
-
-    liveJob.status = 'processing';
-    liveJob.updatedAt = nowIso();
-
-    setTimeout(() => {
-      const nextRecord = findRecordById(record.rfp.id);
-      const nextJob = nextRecord?.ingestJobs.find((entry) => entry.id === job.id);
-
-      if (!nextRecord || !nextJob) {
+app.post('/rfp-records/:rfpId/ingest-jobs', (req, res, next) => {
+  upload.single('file')(req, res, (uploadErr) => {
+    if (uploadErr) {
+      if (uploadErr.code === 'LIMIT_FILE_SIZE') {
+        res.status(413).json({ message: 'File exceeds the 10 MB size limit.' });
         return;
       }
 
-      nextJob.status = 'ready';
-      nextJob.generatedL1Draft = buildIngestDraft(nextJob.fileName);
-      nextJob.updatedAt = nowIso();
-      nextRecord.rfp.intakeStatus = 'ready';
-      nextRecord.rfp.updatedAt = nowIso();
-    }, 900);
-  }, 450);
+      if (uploadErr.code === 'UNSUPPORTED_FILE_TYPE') {
+        res.status(415).json({ message: uploadErr.message });
+        return;
+      }
 
-  res.status(201).json({ job });
+      next(uploadErr);
+      return;
+    }
+
+    const actor = requirePrimaryOwner(req, res);
+    if (!actor) {
+      if (req.file) {
+        try { fs.unlinkSync(resolveUploadPath(req.file.filename)); } catch { /* ignore */ }
+      }
+      return;
+    }
+
+    const record = findRecordById(req.params.rfpId);
+    if (!requireRecord(record, res)) {
+      if (req.file) {
+        try { fs.unlinkSync(resolveUploadPath(req.file.filename)); } catch { /* ignore */ }
+      }
+      return;
+    }
+
+    if (!req.file) {
+      res.status(400).json({ message: 'A file upload is required (multipart field: file).' });
+      return;
+    }
+
+    const fileName = req.file.originalname || req.file.filename;
+    const fileType = req.file.mimetype;
+    // Use only the multer-generated filename (hex), never the full path from req.file.path
+    const storedFilename = req.file.filename;
+
+    const createdAt = nowIso();
+    const job = {
+      id: newId('ingest-job'),
+      rfpId: record.rfp.id,
+      status: 'queued',
+      fileName,
+      fileType,
+      createdAt,
+      updatedAt: createdAt,
+      failureReason: null,
+      generatedL1Draft: [],
+    };
+
+    record.ingestJobs.push(job);
+    record.rfp.intakeMethod = 'ingest';
+    record.rfp.intakeStatus = 'ingesting';
+    record.rfp.updatedAt = nowIso();
+    saveState();
+
+    // Kick off async pipeline without blocking the response
+    setImmediate(() => {
+      void runIngestPipeline(record.rfp.id, job.id, storedFilename, fileType);
+    });
+
+    res.status(201).json({ job });
+  });
 });
 
 app.get('/rfp-records/:rfpId/ingest-jobs/:jobId', (req, res) => {
@@ -480,7 +731,12 @@ app.get('/rfp-records/:rfpId/ingest-jobs/:jobId', (req, res) => {
     return;
   }
 
-  res.json({ job });
+  res.json({
+    job: {
+      ...job,
+      failureReason: job.failureReason ?? null,
+    },
+  });
 });
 
 app.post('/rfp-records/:rfpId/ingest-jobs/:jobId/apply-l1-draft', (req, res) => {
