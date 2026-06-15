@@ -308,10 +308,15 @@ const resolveActor = (req) => {
     }
   }
 
-  return {
-    id: String(req.header('x-user-id') || ''),
-    role: String(req.header('x-role') || ''),
-  };
+  // Header-based identity is only permitted in development mode.
+  if (process.env.NODE_ENV === 'development') {
+    return {
+      id: String(req.header('x-user-id') || ''),
+      role: String(req.header('x-role') || ''),
+    };
+  }
+
+  return { id: '', role: '' };
 };
 
 const requireAuth = (req, res) => {
@@ -564,9 +569,8 @@ app.get('/config', (_req, res) => {
 });
 
 app.put('/config', (req, res) => {
-  const actor = resolveActor(req);
-  if (actor.role !== 'Primary Owner') {
-    res.status(403).json({ message: 'Only Primary Owner can edit config.' });
+  const actor = requirePrimaryOwner(req, res);
+  if (!actor) {
     return;
   }
 
@@ -837,7 +841,11 @@ app.post('/rfps/:rfpId/benchmarks', (req, res) => {
   res.status(201).json({ benchmarks: record.benchmarks });
 });
 
-app.listen(port, () => {
-  // eslint-disable-next-line no-console
-  console.log(`Mock API listening on http://localhost:${port}`);
-});
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(port, () => {
+    // eslint-disable-next-line no-console
+    console.log(`Mock API listening on http://localhost:${port}`);
+  });
+}
+
+export { app };
