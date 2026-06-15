@@ -8,9 +8,13 @@
     "dev:web": "vite",
     "dev:api": "node server/index.js",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "db:migrate": "node -e \"import('./server/db.js').then(m => m.migrate()).then(() => console.log('Migration complete.'))\"",
+    "db:seed": "node server/seed.js"
   },
   "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^11.10.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "react": "^18.3.1",

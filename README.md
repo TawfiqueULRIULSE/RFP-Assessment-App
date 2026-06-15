@@ -20,12 +20,42 @@ Starter app for scoring RFPs with three layers:
 ## Run locally
 ```bash
 npm install
+npm run db:seed   # initialise demo data (safe to re-run)
 npm run dev
+```
+
+## Database
+
+The API uses **SQLite** for local development. The database file is created
+automatically on first startup (or by running `npm run db:seed`).
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `DB_PATH` | `rfp_app.db` (repo root) | Path to the SQLite database file |
+| `PORT` | `4000` | Port the API server listens on |
+
+### Commands
+
+```bash
+# Create/update all tables (idempotent — safe to re-run)
+npm run db:migrate
+
+# Seed demo RFP data (skips if demo data already exists)
+npm run db:seed
+```
+
+### Production (PostgreSQL)
+
+For production deployments, replace the `better-sqlite3` driver with a
+PostgreSQL client (e.g. [`pg`](https://node-postgres.com/)) and update
+`server/db.js` to connect via the `DATABASE_URL` environment variable:
+
+```
+DATABASE_URL=******host:5432/dbname
 ```
 
 ## Good next steps for GitHub Copilot
 - Add auth and role-based access
 - Add comments and panel validation workflow
-- Replace localStorage with API + database
 - Add export to Excel / PDF
 - Add attachments/evidence per score

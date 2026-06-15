@@ -1,5 +1,22 @@
 import cors from 'cors';
 import express from 'express';
+import {
+  db,
+  migrate,
+  rfpFromRow,
+  vendorFromRow,
+  criterionFromRow,
+  scoreFromRow,
+  commentFromRow,
+  evidenceFromRow,
+  benchmarkFromRow,
+  panelValidationFromRow,
+  auditEventFromRow,
+  ingestJobFromRow,
+  configFromRow,
+} from './db.js';
+
+migrate();
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -95,107 +112,104 @@ const defaultL2L3Criteria = [
   },
 ];
 
-const records = new Map();
-const sessions = new Map();
-const appConfig = {
-  layerWeights: {
-    L1: 0.55,
-    L2: 0.3,
-    L3: 0.15,
-  },
-  closeScoreThreshold: 0.03,
-  confidenceBaseline: 100,
-  confidenceVarianceImpact: 0.4,
-  riskAdjustmentFloor: 0.7,
-  riskAdjustmentScale: 0.3,
+// ── Prepared statements ───────────────────────────────────────────────────────
+
+const stmts = {
+  insertRfp: db.prepare(`
+    INSERT INTO rfps (id, title, organization, due_date, intake_method, intake_status,
+                      primary_owner_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  updateRfpIntake: db.prepare(`
+    UPDATE rfps SET intake_method=?, intake_status=?, updated_at=? WHERE id=?
+  `),
+  updateRfpIntakeStatus: db.prepare(`
+    UPDATE rfps SET intake_status=?, updated_at=? WHERE id=?
+  `),
+  insertVendor: db.prepare('INSERT INTO vendors (id, rfp_id, name) VALUES (?, ?, ?)'),
+  insertCriterion: db.prepare(`
+    INSERT INTO criteria (id, rfp_id, layer, label, description) VALUES (?, ?, ?, ?, ?)
+  `),
+  deleteCriteria: db.prepare('DELETE FROM criteria WHERE rfp_id = ?'),
+  insertScore: db.prepare(`
+    INSERT INTO scores (id, rfp_id, vendor_id, criterion_id, layer, owner_id,
+                        value, comment, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  deleteScores: db.prepare('DELETE FROM scores WHERE rfp_id = ?'),
+  updateScore: db.prepare(`
+    UPDATE scores SET value=?, comment=?, updated_at=? WHERE id=?
+  `),
+  insertAuditEvent: db.prepare(`
+    INSERT INTO audit_events (id, rfp_id, score_id, vendor_id, criterion_id,
+      changed_by_id, changed_by_role, old_value, new_value, old_comment, new_comment, changed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  insertComment: db.prepare(`
+    INSERT INTO comments (id, rfp_id, vendor_id, criterion_id, scope, text,
+                          author_id, author_role, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  insertEvidence: db.prepare(`
+    INSERT INTO evidence (id, rfp_id, vendor_id, criterion_id, title, url,
+                          attachment_name, added_by, added_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  deleteBenchmarks: db.prepare('DELETE FROM benchmarks WHERE rfp_id = ?'),
+  insertBenchmark: db.prepare('INSERT INTO benchmarks (id, rfp_id, data) VALUES (?, ?, ?)'),
+  insertPanelValidation: db.prepare(`
+    INSERT INTO panel_validations (id, rfp_id, vendor_id, reviewer_id, decision, comment, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `),
+  insertIngestJob: db.prepare(`
+    INSERT INTO ingest_jobs (id, rfp_id, status, file_name, file_type,
+                             generated_l1_draft, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  updateIngestJobStatus: db.prepare(`
+    UPDATE ingest_jobs SET status=?, updated_at=? WHERE id=?
+  `),
+  updateIngestJobReady: db.prepare(`
+    UPDATE ingest_jobs SET status=?, generated_l1_draft=?, updated_at=? WHERE id=?
+  `),
+  insertSession: db.prepare(`
+    INSERT INTO sessions (token, user_id, role, created_at) VALUES (?, ?, ?, ?)
+  `),
+  deleteSession: db.prepare('DELETE FROM sessions WHERE token = ?'),
+  updateConfig: db.prepare(`
+    UPDATE app_config
+    SET layer_weights=?, close_score_threshold=?, confidence_baseline=?,
+        confidence_variance_impact=?, risk_adjustment_floor=?, risk_adjustment_scale=?
+    WHERE id=1
+  `),
 };
 
-const createScoresForRecord = (rfpId, vendors, criteria) => {
-  const l1 = assessorsWithAssignments.flatMap((assessor) =>
-    vendors.flatMap((vendor) =>
-      criteria
-        .filter((criterion) => criterion.layer === 'L1')
-        .map((criterion) => ({
-          id: newId('score'),
-          rfpId,
-          vendorId: vendor.id,
-          criterionId: criterion.id,
-          layer: 'L1',
-          ownerId: assessor.id,
-          value: null,
-          comment: '',
-          updatedAt: nowIso(),
-        })),
-    ),
-  );
+// ── Repository helpers ────────────────────────────────────────────────────────
 
-  const l2l3 = vendors.flatMap((vendor) =>
-    criteria
-      .filter((criterion) => criterion.layer !== 'L1')
-      .map((criterion) => ({
-        id: newId('score'),
-        rfpId,
-        vendorId: vendor.id,
-        criterionId: criterion.id,
-        layer: criterion.layer,
-        ownerId: users.owner.id,
-        value: null,
-        comment: '',
-        updatedAt: nowIso(),
-      })),
-  );
+const persistScoresForRecord = db.transaction((rfpId, vendors, criteria) => {
+  stmts.deleteScores.run(rfpId);
+  const ts = nowIso();
 
-  return [...l1, ...l2l3];
-};
+  for (const assessor of assessorsWithAssignments) {
+    for (const vendor of vendors) {
+      for (const criterion of criteria.filter((c) => c.layer === 'L1')) {
+        stmts.insertScore.run(
+          newId('score'), rfpId, vendor.id, criterion.id, 'L1',
+          assessor.id, null, '', ts,
+        );
+      }
+    }
+  }
 
-const createRecordStore = ({
-  id,
-  title,
-  organization,
-  dueDate,
-  intakeMethod,
-  intakeStatus,
-  vendors,
-  criteria,
-}) => {
-  const createdAt = nowIso();
-  const rfp = {
-    id,
-    title,
-    createdAt,
-    primaryOwnerId: users.owner.id,
-    organization,
-    dueDate,
-    intakeMethod,
-    intakeStatus,
-    updatedAt: createdAt,
-  };
-
-  return {
-    rfp,
-    vendors,
-    criteria,
-    scores: createScoresForRecord(rfp.id, vendors, criteria),
-    comments: [],
-    evidence: [],
-    benchmarks: [],
-    panelValidations: [],
-    auditEvents: [],
-    ingestJobs: [],
-  };
-};
-
-const seedRecord = createRecordStore({
-  id: 'rfp-2026-network-modernization',
-  title: '2026 Network Modernization RFP',
-  organization: 'City Infrastructure Office',
-  dueDate: '',
-  intakeMethod: 'create',
-  intakeStatus: 'ready',
-  vendors: seedVendors,
-  criteria: seedCriteria,
+  for (const vendor of vendors) {
+    for (const criterion of criteria.filter((c) => c.layer !== 'L1')) {
+      stmts.insertScore.run(
+        newId('score'), rfpId, vendor.id, criterion.id, criterion.layer,
+        users.owner.id, null, '', ts,
+      );
+    }
+  }
 });
-records.set(seedRecord.rfp.id, seedRecord);
 
 const buildAppUsers = () => [
   users.owner,
@@ -205,22 +219,32 @@ const buildAppUsers = () => [
 
 const findUserById = (userId) => buildAppUsers().find((user) => user.id === userId);
 
-const listRfps = () => Array.from(records.values()).map((record) => record.rfp);
+const listRfps = () => db.prepare('SELECT * FROM rfps').all().map(rfpFromRow);
 
-const firstRecord = () => Array.from(records.values())[0] ?? null;
-
-const findRecordById = (rfpId) => records.get(rfpId) ?? null;
-
-const findRecordByScoreId = (scoreId) => {
-  for (const record of records.values()) {
-    const score = record.scores.find((entry) => entry.id === scoreId);
-    if (score) {
-      return { record, score };
-    }
-  }
-
-  return null;
+const firstRfpId = () => {
+  const row = db.prepare('SELECT id FROM rfps LIMIT 1').get();
+  return row?.id ?? null;
 };
+
+const loadRecord = (rfpId) => {
+  const rfpRow = db.prepare('SELECT * FROM rfps WHERE id = ?').get(rfpId);
+  if (!rfpRow) return null;
+
+  return {
+    rfp: rfpFromRow(rfpRow),
+    vendors: db.prepare('SELECT * FROM vendors WHERE rfp_id = ?').all(rfpId).map(vendorFromRow),
+    criteria: db.prepare('SELECT * FROM criteria WHERE rfp_id = ?').all(rfpId).map(criterionFromRow),
+    scores: db.prepare('SELECT * FROM scores WHERE rfp_id = ?').all(rfpId).map(scoreFromRow),
+    comments: db.prepare('SELECT * FROM comments WHERE rfp_id = ?').all(rfpId).map(commentFromRow),
+    evidence: db.prepare('SELECT * FROM evidence WHERE rfp_id = ?').all(rfpId).map(evidenceFromRow),
+    benchmarks: db.prepare('SELECT * FROM benchmarks WHERE rfp_id = ?').all(rfpId).map(benchmarkFromRow),
+    panelValidations: db.prepare('SELECT * FROM panel_validations WHERE rfp_id = ?').all(rfpId).map(panelValidationFromRow),
+    auditEvents: db.prepare('SELECT * FROM audit_events WHERE rfp_id = ?').all(rfpId).map(auditEventFromRow),
+    ingestJobs: db.prepare('SELECT * FROM ingest_jobs WHERE rfp_id = ?').all(rfpId).map(ingestJobFromRow),
+  };
+};
+
+const findRecordById = (rfpId) => loadRecord(rfpId);
 
 const requirePrimaryOwner = (req, res) => {
   const actor = requireAuth(req, res);
@@ -236,14 +260,14 @@ const requirePrimaryOwner = (req, res) => {
   return actor;
 };
 
+const resolveRequestedRfpId = (req) => {
+  const requestedRfpId = String(req.query.rfpId || req.body?.rfpId || '').trim();
+  return requestedRfpId || firstRfpId();
+};
+
 const resolveRequestedRecord = (req) => {
-  const requestedRfpId = String(req.query.rfpId || req.body.rfpId || '').trim();
-
-  if (requestedRfpId) {
-    return findRecordById(requestedRfpId);
-  }
-
-  return firstRecord();
+  const rfpId = resolveRequestedRfpId(req);
+  return rfpId ? findRecordById(rfpId) : null;
 };
 
 const requireRecord = (record, res) => {
@@ -299,10 +323,10 @@ const resolveActor = (req) => {
     .trim();
 
   if (bearerToken) {
-    const session = sessions.get(bearerToken);
+    const session = db.prepare('SELECT * FROM sessions WHERE token = ?').get(bearerToken);
     if (session) {
       return {
-        id: session.id,
+        id: session.user_id,
         role: session.role,
       };
     }
@@ -378,19 +402,26 @@ app.post('/rfp-records', (req, res) => {
     return;
   }
 
-  const record = createRecordStore({
+  const createdAt = nowIso();
+  const rfp = {
     id: newId('rfp'),
     title,
     organization,
     dueDate,
     intakeMethod: 'create',
     intakeStatus: 'draft',
-    vendors: [],
-    criteria: [],
-  });
+    primaryOwnerId: users.owner.id,
+    createdAt,
+    updatedAt: createdAt,
+  };
 
-  records.set(record.rfp.id, record);
-  res.status(201).json({ record: record.rfp });
+  stmts.insertRfp.run(
+    rfp.id, rfp.title, rfp.organization, rfp.dueDate,
+    rfp.intakeMethod, rfp.intakeStatus, rfp.primaryOwnerId,
+    rfp.createdAt, rfp.updatedAt,
+  );
+
+  res.status(201).json({ record: rfp });
 });
 
 app.get('/rfp-records/:rfpId', (req, res) => {
@@ -408,8 +439,9 @@ app.post('/rfp-records/:rfpId/ingest-jobs', (req, res) => {
     return;
   }
 
-  const record = findRecordById(req.params.rfpId);
-  if (!requireRecord(record, res)) {
+  const rfpRow = db.prepare('SELECT * FROM rfps WHERE id = ?').get(req.params.rfpId);
+  if (!rfpRow) {
+    res.status(404).json({ message: 'RFP record not found.' });
     return;
   }
 
@@ -424,7 +456,7 @@ app.post('/rfp-records/:rfpId/ingest-jobs', (req, res) => {
   const createdAt = nowIso();
   const job = {
     id: newId('ingest-job'),
-    rfpId: record.rfp.id,
+    rfpId: rfpRow.id,
     status: 'queued',
     fileName,
     fileType,
@@ -433,35 +465,19 @@ app.post('/rfp-records/:rfpId/ingest-jobs', (req, res) => {
     generatedL1Draft: [],
   };
 
-  record.ingestJobs.push(job);
-  record.rfp.intakeMethod = 'ingest';
-  record.rfp.intakeStatus = 'ingesting';
-  record.rfp.updatedAt = nowIso();
+  stmts.insertIngestJob.run(
+    job.id, job.rfpId, job.status, job.fileName, job.fileType,
+    JSON.stringify(job.generatedL1Draft), job.createdAt, job.updatedAt,
+  );
+  stmts.updateRfpIntake.run('ingest', 'ingesting', nowIso(), rfpRow.id);
 
   setTimeout(() => {
-    const liveRecord = findRecordById(record.rfp.id);
-    const liveJob = liveRecord?.ingestJobs.find((entry) => entry.id === job.id);
-
-    if (!liveRecord || !liveJob) {
-      return;
-    }
-
-    liveJob.status = 'processing';
-    liveJob.updatedAt = nowIso();
+    stmts.updateIngestJobStatus.run('processing', nowIso(), job.id);
 
     setTimeout(() => {
-      const nextRecord = findRecordById(record.rfp.id);
-      const nextJob = nextRecord?.ingestJobs.find((entry) => entry.id === job.id);
-
-      if (!nextRecord || !nextJob) {
-        return;
-      }
-
-      nextJob.status = 'ready';
-      nextJob.generatedL1Draft = buildIngestDraft(nextJob.fileName);
-      nextJob.updatedAt = nowIso();
-      nextRecord.rfp.intakeStatus = 'ready';
-      nextRecord.rfp.updatedAt = nowIso();
+      const draft = buildIngestDraft(job.fileName);
+      stmts.updateIngestJobReady.run('ready', JSON.stringify(draft), nowIso(), job.id);
+      stmts.updateRfpIntakeStatus.run('ready', nowIso(), job.rfpId);
     }, 900);
   }, 450);
 
@@ -469,18 +485,20 @@ app.post('/rfp-records/:rfpId/ingest-jobs', (req, res) => {
 });
 
 app.get('/rfp-records/:rfpId/ingest-jobs/:jobId', (req, res) => {
-  const record = findRecordById(req.params.rfpId);
-  if (!requireRecord(record, res)) {
+  const rfpRow = db.prepare('SELECT id FROM rfps WHERE id = ?').get(req.params.rfpId);
+  if (!rfpRow) {
+    res.status(404).json({ message: 'RFP record not found.' });
     return;
   }
 
-  const job = record.ingestJobs.find((entry) => entry.id === req.params.jobId);
-  if (!job) {
+  const jobRow = db.prepare('SELECT * FROM ingest_jobs WHERE id = ? AND rfp_id = ?')
+    .get(req.params.jobId, req.params.rfpId);
+  if (!jobRow) {
     res.status(404).json({ message: 'Ingest job not found.' });
     return;
   }
 
-  res.json({ job });
+  res.json({ job: ingestJobFromRow(jobRow) });
 });
 
 app.post('/rfp-records/:rfpId/ingest-jobs/:jobId/apply-l1-draft', (req, res) => {
@@ -489,27 +507,38 @@ app.post('/rfp-records/:rfpId/ingest-jobs/:jobId/apply-l1-draft', (req, res) => 
     return;
   }
 
-  const record = findRecordById(req.params.rfpId);
-  if (!requireRecord(record, res)) {
+  const rfpRow = db.prepare('SELECT * FROM rfps WHERE id = ?').get(req.params.rfpId);
+  if (!rfpRow) {
+    res.status(404).json({ message: 'RFP record not found.' });
     return;
   }
 
-  const job = record.ingestJobs.find((entry) => entry.id === req.params.jobId);
-  if (!job) {
+  const jobRow = db.prepare('SELECT * FROM ingest_jobs WHERE id = ? AND rfp_id = ?')
+    .get(req.params.jobId, req.params.rfpId);
+  if (!jobRow) {
     res.status(404).json({ message: 'Ingest job not found.' });
     return;
   }
 
-  if (job.status !== 'ready') {
+  if (jobRow.status !== 'ready') {
     res.status(400).json({ message: 'Ingest job is not ready to apply.' });
     return;
   }
 
-  const l1Criteria = job.generatedL1Draft.map((criterion) => ({ ...criterion }));
-  record.criteria = ensureL2L3Criteria(l1Criteria);
-  record.scores = createScoresForRecord(record.rfp.id, record.vendors, record.criteria);
-  record.rfp.intakeStatus = 'ready';
-  record.rfp.updatedAt = nowIso();
+  const generatedL1Draft = JSON.parse(jobRow.generated_l1_draft || '[]');
+  const l1Criteria = generatedL1Draft.map((criterion) => ({ ...criterion }));
+  const allCriteria = ensureL2L3Criteria(l1Criteria);
+  const vendors = db.prepare('SELECT * FROM vendors WHERE rfp_id = ?').all(req.params.rfpId).map(vendorFromRow);
+
+  const applyDraft = db.transaction(() => {
+    stmts.deleteCriteria.run(req.params.rfpId);
+    for (const c of allCriteria) {
+      stmts.insertCriterion.run(c.id, req.params.rfpId, c.layer, c.label, c.description);
+    }
+    persistScoresForRecord(req.params.rfpId, vendors, allCriteria);
+    stmts.updateRfpIntakeStatus.run('ready', nowIso(), req.params.rfpId);
+  });
+  applyDraft();
 
   res.status(201).json({ criteria: l1Criteria });
 });
@@ -528,7 +557,7 @@ app.post('/auth/login', (req, res) => {
   }
 
   const token = newId('session');
-  sessions.set(token, { id: user.id, role: user.role });
+  stmts.insertSession.run(token, user.id, user.role, nowIso());
   res.status(201).json({ token, user });
 });
 
@@ -553,14 +582,15 @@ app.post('/auth/logout', (req, res) => {
     .trim();
 
   if (token) {
-    sessions.delete(token);
+    stmts.deleteSession.run(token);
   }
 
   res.json({ ok: true });
 });
 
 app.get('/config', (_req, res) => {
-  res.json({ config: appConfig });
+  const row = db.prepare('SELECT * FROM app_config WHERE id = 1').get();
+  res.json({ config: configFromRow(row) });
 });
 
 app.put('/config', (req, res) => {
@@ -570,23 +600,35 @@ app.put('/config', (req, res) => {
     return;
   }
 
+  const current = configFromRow(db.prepare('SELECT * FROM app_config WHERE id = 1').get());
+
+  const next = {
+    layerWeights: current.layerWeights,
+    closeScoreThreshold: Number(req.body.closeScoreThreshold ?? current.closeScoreThreshold),
+    confidenceBaseline: Number(req.body.confidenceBaseline ?? current.confidenceBaseline),
+    confidenceVarianceImpact: Number(req.body.confidenceVarianceImpact ?? current.confidenceVarianceImpact),
+    riskAdjustmentFloor: Number(req.body.riskAdjustmentFloor ?? current.riskAdjustmentFloor),
+    riskAdjustmentScale: Number(req.body.riskAdjustmentScale ?? current.riskAdjustmentScale),
+  };
+
   if (req.body.layerWeights) {
-    appConfig.layerWeights = {
-      L1: Number(req.body.layerWeights.L1 ?? appConfig.layerWeights.L1),
-      L2: Number(req.body.layerWeights.L2 ?? appConfig.layerWeights.L2),
-      L3: Number(req.body.layerWeights.L3 ?? appConfig.layerWeights.L3),
+    next.layerWeights = {
+      L1: Number(req.body.layerWeights.L1 ?? current.layerWeights.L1),
+      L2: Number(req.body.layerWeights.L2 ?? current.layerWeights.L2),
+      L3: Number(req.body.layerWeights.L3 ?? current.layerWeights.L3),
     };
   }
 
-  appConfig.closeScoreThreshold = Number(req.body.closeScoreThreshold ?? appConfig.closeScoreThreshold);
-  appConfig.confidenceBaseline = Number(req.body.confidenceBaseline ?? appConfig.confidenceBaseline);
-  appConfig.confidenceVarianceImpact = Number(
-    req.body.confidenceVarianceImpact ?? appConfig.confidenceVarianceImpact,
+  stmts.updateConfig.run(
+    JSON.stringify(next.layerWeights),
+    next.closeScoreThreshold,
+    next.confidenceBaseline,
+    next.confidenceVarianceImpact,
+    next.riskAdjustmentFloor,
+    next.riskAdjustmentScale,
   );
-  appConfig.riskAdjustmentFloor = Number(req.body.riskAdjustmentFloor ?? appConfig.riskAdjustmentFloor);
-  appConfig.riskAdjustmentScale = Number(req.body.riskAdjustmentScale ?? appConfig.riskAdjustmentScale);
 
-  res.json({ config: appConfig });
+  res.json({ config: next });
 });
 
 app.get('/scores', (req, res) => {
@@ -603,14 +645,14 @@ app.put('/scores/:scoreId', (req, res) => {
   if (!actor) {
     return;
   }
-  const match = findRecordByScoreId(req.params.scoreId);
 
-  if (!match) {
+  const scoreRow = db.prepare('SELECT * FROM scores WHERE id = ?').get(req.params.scoreId);
+  if (!scoreRow) {
     res.status(404).json({ message: 'Score not found.' });
     return;
   }
 
-  const { record, score } = match;
+  const score = scoreFromRow(scoreRow);
 
   if (!canWriteScore(actor, score)) {
     res.status(403).json({ message: 'Not authorized to update this score.' });
@@ -619,6 +661,7 @@ app.put('/scores/:scoreId', (req, res) => {
 
   const nextValue = Object.prototype.hasOwnProperty.call(req.body, 'value') ? req.body.value : score.value;
   const nextComment = typeof req.body.comment === 'string' ? req.body.comment : score.comment;
+  const changedAt = nowIso();
 
   const auditEvent = {
     id: newId('audit'),
@@ -632,16 +675,19 @@ app.put('/scores/:scoreId', (req, res) => {
     newValue: nextValue,
     oldComment: score.comment,
     newComment: nextComment,
-    changedAt: nowIso(),
+    changedAt,
   };
 
-  score.value = nextValue;
-  score.comment = nextComment;
-  score.updatedAt = auditEvent.changedAt;
+  stmts.updateScore.run(nextValue ?? null, nextComment, changedAt, score.id);
+  stmts.insertAuditEvent.run(
+    auditEvent.id, auditEvent.rfpId, auditEvent.scoreId, auditEvent.vendorId,
+    auditEvent.criterionId, auditEvent.changedById, auditEvent.changedByRole,
+    auditEvent.oldValue ?? null, auditEvent.newValue ?? null,
+    auditEvent.oldComment, auditEvent.newComment, auditEvent.changedAt,
+  );
 
-  record.auditEvents.push(auditEvent);
-
-  res.json({ score, auditEvent });
+  const updatedScore = { ...score, value: nextValue, comment: nextComment, updatedAt: changedAt };
+  res.json({ score: updatedScore, auditEvent });
 });
 
 app.get('/audit', (req, res) => {
@@ -668,14 +714,16 @@ app.post('/comments', (req, res) => {
     return;
   }
 
-  const record = findRecordById(String(req.body.rfpId || '').trim());
-  if (!requireRecord(record, res)) {
+  const rfpId = String(req.body.rfpId || '').trim();
+  const rfpRow = db.prepare('SELECT id FROM rfps WHERE id = ?').get(rfpId);
+  if (!rfpRow) {
+    res.status(404).json({ message: 'RFP record not found.' });
     return;
   }
 
   const comment = {
     id: newId('comment'),
-    rfpId: record.rfp.id,
+    rfpId: rfpRow.id,
     vendorId: String(req.body.vendorId || ''),
     criterionId: String(req.body.criterionId || ''),
     scope: String(req.body.scope || 'general'),
@@ -685,7 +733,10 @@ app.post('/comments', (req, res) => {
     createdAt: nowIso(),
   };
 
-  record.comments.push(comment);
+  stmts.insertComment.run(
+    comment.id, comment.rfpId, comment.vendorId, comment.criterionId,
+    comment.scope, comment.text, comment.authorId, comment.authorRole, comment.createdAt,
+  );
   res.status(201).json({ comment });
 });
 
@@ -761,7 +812,10 @@ app.post('/panel-validations', (req, res) => {
     createdAt: nowIso(),
   };
 
-  record.panelValidations.push(validation);
+  stmts.insertPanelValidation.run(
+    validation.id, validation.rfpId, validation.vendorId,
+    validation.reviewerId, validation.decision, validation.comment, validation.createdAt,
+  );
   res.status(201).json({ validation });
 });
 
@@ -785,14 +839,16 @@ app.post('/evidence', (req, res) => {
     return;
   }
 
-  const record = findRecordById(String(req.body.rfpId || '').trim());
-  if (!requireRecord(record, res)) {
+  const rfpId = String(req.body.rfpId || '').trim();
+  const rfpRow = db.prepare('SELECT id FROM rfps WHERE id = ?').get(rfpId);
+  if (!rfpRow) {
+    res.status(404).json({ message: 'RFP record not found.' });
     return;
   }
 
   const item = {
     id: newId('evidence'),
-    rfpId: record.rfp.id,
+    rfpId: rfpRow.id,
     vendorId: String(req.body.vendorId || ''),
     criterionId: String(req.body.criterionId || ''),
     title: String(req.body.title || ''),
@@ -802,39 +858,49 @@ app.post('/evidence', (req, res) => {
     addedAt: nowIso(),
   };
 
-  record.evidence.push(item);
+  stmts.insertEvidence.run(
+    item.id, item.rfpId, item.vendorId, item.criterionId,
+    item.title, item.url, item.attachmentName, item.addedBy, item.addedAt,
+  );
   res.status(201).json({ evidence: item });
 });
 
 app.get('/rfps/:rfpId/benchmarks', (req, res) => {
-  const record = findRecordById(req.params.rfpId);
-  if (!requireRecord(record, res)) {
+  const rfpRow = db.prepare('SELECT id FROM rfps WHERE id = ?').get(req.params.rfpId);
+  if (!rfpRow) {
+    res.status(404).json({ message: 'RFP record not found.' });
     return;
   }
 
-  res.json({ benchmarks: record.benchmarks });
+  const benchmarks = db.prepare('SELECT * FROM benchmarks WHERE rfp_id = ?')
+    .all(req.params.rfpId).map(benchmarkFromRow);
+  res.json({ benchmarks });
 });
 
 app.post('/rfps/:rfpId/benchmarks', (req, res) => {
-  const record = findRecordById(req.params.rfpId);
-  if (!requireRecord(record, res)) {
+  const rfpRow = db.prepare('SELECT id FROM rfps WHERE id = ?').get(req.params.rfpId);
+  if (!rfpRow) {
+    res.status(404).json({ message: 'RFP record not found.' });
     return;
   }
 
   const incoming = Array.isArray(req.body.benchmarks) ? req.body.benchmarks : [];
-  const retained = [];
+  const retained = incoming.map((item) => ({
+    ...item,
+    id: item.id || newId('benchmark'),
+    rfpId: req.params.rfpId,
+    recordedAt: item.recordedAt || nowIso(),
+  }));
 
-  for (const item of incoming) {
-    retained.push({
-      ...item,
-      id: item.id || newId('benchmark'),
-      rfpId: req.params.rfpId,
-      recordedAt: item.recordedAt || nowIso(),
-    });
-  }
+  const replaceBenchmarks = db.transaction(() => {
+    stmts.deleteBenchmarks.run(req.params.rfpId);
+    for (const item of retained) {
+      stmts.insertBenchmark.run(item.id, req.params.rfpId, JSON.stringify(item));
+    }
+  });
+  replaceBenchmarks();
 
-  record.benchmarks.splice(0, record.benchmarks.length, ...retained);
-  res.status(201).json({ benchmarks: record.benchmarks });
+  res.status(201).json({ benchmarks: retained });
 });
 
 app.listen(port, () => {
